@@ -39,7 +39,7 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           TG_ZIP_CHANNEL: ${{ secrets.TG_ZIP_CHANNEL }}
-        run: timeout 20m python scrape.py
+        run: timeout 24m python -u scrape.py
 
       - uses: actions/upload-pages-artifact@v3
         with:
