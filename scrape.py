@@ -12,12 +12,12 @@ SETTINGS = json.loads(Path("settings.json").read_text(encoding="utf-8"))
 DAYS = int(SETTINGS.get("days", 15))
 SLABS = sorted(SETTINGS["slabs"], key=lambda s: s["upto"])
 EXTRA_BLOCK = [w.lower() for w in SETTINGS.get("block_words", []) if w]
-GROUP_GAP = 120
+GROUP_GAP = 900
+MAX_VIDEO = 50 * 1024 * 1024
 WORK = Path("work")
 OUT = Path("public")
 IMG_DIR = OUT / "images"
 VID_DIR = OUT / "videos"
-MAX_VIDEO = 15 * 1024 * 1024
 
 BLOCK_WORDS = ["stock in", "stock out", "stock over", "address", "whatsapp",
                "telegram", "t.me", "@", "http", "www."] + EXTRA_BLOCK
@@ -148,11 +148,11 @@ def file_hash(p):
     return h.hexdigest()[:12]
 
 
-def save_media(names, src_dir):
+def save_media(names, index):
     images, video = [], None
     for n in names:
-        p = src_dir / n
-        if not p.exists():
+        p = index.get(n)
+        if p is None:
             continue
         ext = p.suffix.lower()
         try:
