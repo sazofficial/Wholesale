@@ -231,8 +231,18 @@ async def fetch_zip():
             f = msg.file
             if f and f.name and f.name.lower().endswith(".zip"):
                 path = WORK / "chat.zip"
-                print("zip mili:", f.name, f.size, "bytes", flush=True)
-                await client.download_media(msg, file=str(path))
+                total = f.size
+                got = 0
+                last = 0
+                print("download shuru:", total // 1048576, "MB", flush=True)
+                with open(path, "wb") as out:
+                    async for chunk in client.iter_download(msg.media, request_size=1024 * 1024):
+                        out.write(chunk)
+                        got += len(chunk)
+                        if got - last >= 20 * 1024 * 1024:
+                            print(f"download: {got // 1048576} MB / {total // 1048576} MB", flush=True)
+                            last = got
+                print("download poora hua", flush=True)
                 return path
     return None
 
