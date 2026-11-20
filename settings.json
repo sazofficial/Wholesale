@@ -1,0 +1,19 @@
+{
+  "slabs": [
+    {"upto": 5, "add": 15},
+    {"upto": 10, "add": 25},
+    {"upto": 20, "add": 40},
+    {"upto": 100, "add": 50},
+    {"upto": 200, "add": 100},
+    {"upto": 500, "add": 150},
+    {"upto": 1000, "add": 400},
+    {"upto": 2000, "add": 700},
+    {"upto": 5000, "add": 1000},
+    {"upto": 10000, "add": 1500}
+  ],
+  "days": 15,
+  "whatsapp": "918980161610",
+  "shop_name": "SAZ",
+  "order_url": "https://script.google.com/macros/s/AKfycbyS4-kS0zwY5qYmTCTWy2P874t1cTFpIhYuQi6sbl0kAwo_yxwMd8sduzseErq1g6IQ/exec",
+  "block_words": []
+}
