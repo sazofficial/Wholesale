@@ -227,11 +227,11 @@ async def fetch_zip():
     async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
                               int(os.environ["TG_API_ID"]),
                               os.environ["TG_API_HASH"]) as client:
-        async for msg in client.iter_messages(chat, limit=100):
+        async for msg in client.iter_messages(chat, limit=20):
             f = msg.file
             if f and f.name and f.name.lower().endswith(".zip"):
                 path = WORK / "chat.zip"
-                print("zip mili:", f.name, f.size, "bytes")
+                print("zip mili:", f.name, f.size, "bytes", flush=True)
                 await client.download_media(msg, file=str(path))
                 return path
     return None
