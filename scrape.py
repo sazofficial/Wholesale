@@ -267,7 +267,8 @@ def main():
 
     text = txts[0].read_text(encoding="utf-8", errors="ignore")
     groups = group_messages(parse_chat(text))
-    products, skipped = build(groups, txts[0].parent, now)
+    index = {p.name: p for p in ex.rglob("*") if p.is_file()}
+    products, skipped = build(groups, index, now)
     write_site(products, now)
     print(f"products: {len(products)}, skipped: {len(skipped)}")
     for s in skipped[:80]:
