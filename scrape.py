@@ -8,15 +8,19 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 IST = ZoneInfo("Asia/Kolkata")
-DAYS = 20                 # sirf last 20 din ka data
-GROUP_GAP = 120           # 2 minute ke andar same seller ke messages ek hi product
+SETTINGS = json.loads(Path("settings.json").read_text(encoding="utf-8"))
+DAYS = int(SETTINGS.get("days", 15))
+SLABS = sorted(SETTINGS["slabs"], key=lambda s: s["upto"])
+EXTRA_BLOCK = [w.lower() for w in SETTINGS.get("block_words", []) if w]
+GROUP_GAP = 120
 WORK = Path("work")
 OUT = Path("public")
-MEDIA = OUT / "media"
+IMG_DIR = OUT / "images"
+VID_DIR = OUT / "videos"
 MAX_VIDEO = 15 * 1024 * 1024
 
 BLOCK_WORDS = ["stock in", "stock out", "stock over", "address", "whatsapp",
-               "telegram", "t.me", "@", "http", "www."]
+               "telegram", "t.me", "@", "http", "www."] + EXTRA_BLOCK
 PHONE_RE = re.compile(r"\+?\d[\d\s-]{8,}\d")
 LINE_RE = re.compile(
     r"^\[?(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)\]?\s*-?\s*([^:]{1,60}?):\s?(.*)$"
@@ -132,17 +136,10 @@ def parse_price(text):
 
 
 def margin_for(w):
-    if w < 500:
-        return 150
-    if w < 900:
-        return 250
-    if w < 1400:
-        return 450
-    if w < 1800:
-        return 600
-    if w <= 3000:
-        return 900
-    return 1200
+    for s in SLABS:
+        if w <= s["upto"]:
+            return s["add"]
+    return None
 def file_hash(p):
     h = hashlib.sha1()
     with open(p, "rb") as f:
@@ -151,30 +148,33 @@ def file_hash(p):
     return h.hexdigest()[:12]
 
 
-def handle_media(names, src_dir):
-    items = []
+def save_media(names, src_dir):
+    images, video = [], None
     for n in names:
         p = src_dir / n
         if not p.exists():
             continue
         ext = p.suffix.lower()
-        if ext in (".jpg", ".jpeg", ".png", ".webp"):
-            out = MEDIA / f"{file_hash(p)}.jpg"
-            if not out.exists():
-                with Image.open(p) as im:
-                    im = im.convert("RGB")
-                    im.thumbnail((900, 900))
-                    im.save(out, "JPEG", quality=80, optimize=True)
-            items.append({"type": "image", "src": f"media/{out.name}"})
-        elif ext == ".mp4" and p.stat().st_size <= MAX_VIDEO:
-            out = MEDIA / f"{file_hash(p)}.mp4"
-            if not out.exists():
-                shutil.copyfile(p, out)
-            items.append({"type": "video", "src": f"media/{out.name}"})
-    return items
+        try:
+            if ext in (".jpg", ".jpeg", ".png", ".webp"):
+                out = IMG_DIR / f"{file_hash(p)}.jpg"
+                if not out.exists():
+                    with Image.open(p) as im:
+                        im = im.convert("RGB")
+                        im.thumbnail((900, 900))
+                        im.save(out, "JPEG", quality=80, optimize=True)
+                images.append(f"images/{out.name}")
+            elif ext == ".mp4" and video is None and p.stat().st_size <= MAX_VIDEO:
+                out = VID_DIR / f"{file_hash(p)}.mp4"
+                if not out.exists():
+                    shutil.copyfile(p, out)
+                video = f"videos/{out.name}"
+        except Exception as e:
+            print("media skip:", n, e)
+    return images, video
 
 
-def build_products(groups, src_dir, now):
+def build(groups, src_dir, now):
     cutoff = now - dt.timedelta(days=DAYS)
     best, skipped = {}, []
     for g in groups:
@@ -186,19 +186,40 @@ def build_products(groups, src_dir, now):
             continue
         wp = parse_price(g["text"])
         if wp is None:
-            skipped.append(f"price nahi mila: {info['name']}")
+            skipped.append("price nahi: " + info["name"][:60])
             continue
-        media = handle_media(g["files"], src_dir)
-        first = media[0]["src"] if media else ""
-        key = (info["name"].lower(), info["description"].lower(), first)
-        prod = {"name": info["name"], "description": info["description"],
-                "price": wp + margin_for(wp), "date": g["last"].isoformat(),
-                "media": media}
-        # same naam + description + photo = same product, sirf latest rakho
-        if key not in best or g["last"] > best[key][0]:
-            best[key] = (g["last"], prod)
-    products = [v[1] for v in sorted(best.values(), key=lambda x: x[0], reverse=True)]
+        mg = margin_for(wp)
+        if mg is None:
+            skipped.append(f"slab se bahar ({wp}): " + info["name"][:60])
+            continue
+        images, video = save_media(g["files"], src_dir)
+        key = (info["name"].lower(), info["description"].lower(), images[0] if images else "")
+        if key in best and best[key][0] >= g["last"]:
+            continue
+        pid = "p" + hashlib.sha1("|".join(key).encode("utf-8")).hexdigest()[:8]
+        prod = {"id": pid, "title": info["name"], "raw": info["name"],
+                "text": info["description"], "price": wp + mg,
+                "date": g["last"].isoformat(), "category": "", "crop": "",
+                "images": images or [""], "video": video}
+        best[key] = (g["last"], prod)
+    products = [v[1] for v in best.values()]
     return products, skipped
+
+
+def write_site(products, now):
+    products.sort(key=lambda p: p["date"], reverse=True)
+    compact = [{"i": p["id"], "t": p["title"], "p": p["price"], "d": p["date"],
+                "k": p["text"], "m": p["images"][0]} for p in products]
+    (OUT / "first.json").write_text(json.dumps(compact[:40], ensure_ascii=False), encoding="utf-8")
+    (OUT / "light.json").write_text(json.dumps(compact, ensure_ascii=False), encoding="utf-8")
+    buckets = {c: [] for c in "0123456789abcdef"}
+    for p in products:
+        buckets[p["id"][1]].append(p)
+    for c, arr in buckets.items():
+        (OUT / "p" / f"{c}.json").write_text(json.dumps(arr, ensure_ascii=False), encoding="utf-8")
+    cfg = {"shop_name": SETTINGS["shop_name"], "whatsapp": SETTINGS.get("whatsapp", ""),
+           "order_url": SETTINGS.get("order_url", ""), "v": str(int(now.timestamp()))}
+    (OUT / "config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
 
 
 async def fetch_zip():
@@ -218,9 +239,8 @@ async def fetch_zip():
 
 def main():
     now = dt.datetime.now(IST)
-    WORK.mkdir(exist_ok=True)
-    OUT.mkdir(exist_ok=True)
-    MEDIA.mkdir(parents=True, exist_ok=True)
+    for d in (WORK, IMG_DIR, VID_DIR, OUT / "p"):
+        d.mkdir(parents=True, exist_ok=True)
 
     zip_path = asyncio.run(fetch_zip())
     if zip_path is None:
@@ -228,7 +248,6 @@ def main():
         sys.exit(1)
 
     ex = WORK / "chat"
-    shutil.rmtree(ex, ignore_errors=True)
     with zipfile.ZipFile(zip_path) as z:
         z.extractall(ex)
     txts = sorted(ex.rglob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
@@ -238,18 +257,12 @@ def main():
 
     text = txts[0].read_text(encoding="utf-8", errors="ignore")
     groups = group_messages(parse_chat(text))
-    products, skipped = build_products(groups, txts[0].parent, now)
-
-    data = {"updated": now.isoformat(), "count": len(products), "products": products}
-    (OUT / "products.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    products, skipped = build(groups, txts[0].parent, now)
+    write_site(products, now)
     print(f"products: {len(products)}, skipped: {len(skipped)}")
-    for s in skipped[:50]:
+    for s in skipped[:80]:
         print(" -", s)
     shutil.rmtree(WORK, ignore_errors=True)
-
-
-async def _noop():
-    pass
 
 
 if __name__ == "__main__":
