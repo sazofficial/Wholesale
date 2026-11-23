@@ -162,47 +162,49 @@ def save_media(names, index):
 
 
 def build(msgs, index, now):
-    """Pending photos (media-only messages) attach to the next product text from same seller."""
+    """Admin ka pattern: pehle photo/video, phir description. Media ko agle product text se jodta hai,
+    agar agla na mile to pichhle se. GIF (update wala) ignore hota hai."""
     cutoff = now - dt.timedelta(days=DAYS)
-    best, skipped, pending = {}, [], []
+    items, media, skipped = [], [], []
     for m in msgs:
         files, text = clean_text(m["text"])
-        if files and not text.strip():
-            pending.append((m["time"], m["sender"], files))
-            continue
+        files = [f for f in files if not f.upper().startswith("GIF")]
         if not text.strip():
-            continue
-        if m["time"] < cutoff:
-            pending = []
+            if files:
+                media.append((m["time"], m["sender"], files))
             continue
         prod, err = make_product(text, m["sender"])
-        if not prod:
-            pending = [p for p in pending if (m["time"] - p[0]).total_seconds() <= PENDING_GAP]
-            continue
-        names = list(files)
-        for t, s, fl in pending:
-            if s == m["sender"] and (m["time"] - t).total_seconds() <= PENDING_GAP:
-                names += fl
-        pending_before = list(pending)
-        pending = []
-        images, videos = save_media(names, index)
+        if prod and m["time"] >= cutoff:
+            items.append({"time": m["time"], "sender": m["sender"], "prod": prod,
+                          "names": list(files)})
+    for t, s, fl in media:
+        gap = lambda it: (it["time"] - t).total_seconds()
+        after = [it for it in items if it["sender"] == s and 0 <= gap(it) <= PENDING_GAP]
+        before = [it for it in items if it["sender"] == s and -PENDING_GAP <= gap(it) < 0]
+        if after:
+            min(after, key=gap)["names"] += fl
+        elif before:
+            max(before, key=gap)["names"] += fl
+    best_map = {}
+    for it in items:
+        prod = it["prod"]
+        images, videos = save_media(it["names"], index)
         if not images:
-            print("DBG", prod["name"][:30], "| names:", names, "| pending:", [(p[0].strftime("%d-%H:%M"), p[1][-4:], p[2]) for p in pending_before][:4], flush=True)
-            skipped.append(f"photo nahi ({m['time']:%d-%m}): " + prod["name"][:60])
+            skipped.append(f"photo nahi ({it['time']:%d-%m}): " + prod["name"][:60])
             continue
-        key = (prod["name"].lower(), prod["description"].lower(), images[0])
-        if key in best and best[key][0] >= m["time"]:
-            continue
-        pid = "p" + hashlib.sha1("|".join(key).encode("utf-8")).hexdigest()[:8]
         mg = margin_for(prod["price"])
         if mg is None:
             skipped.append(f"slab se bahar ({prod['price']}): " + prod["name"][:60])
             continue
-        best[key] = (m["time"], {
+        key = (prod["name"].lower(), prod["description"].lower(), images[0])
+        if key in best_map and best_map[key][0] >= it["time"]:
+            continue
+        pid = "p" + hashlib.sha1("|".join(key).encode("utf-8")).hexdigest()[:8]
+        best_map[key] = (it["time"], {
             "id": pid, "title": prod["name"], "raw": prod["name"], "text": prod["description"],
-            "price": prod["price"] + mg, "date": m["time"].isoformat(), "category": "", "crop": "",
+            "price": prod["price"] + mg, "date": it["time"].isoformat(), "category": "", "crop": "",
             "images": images, "videos": videos, "sizes": prod["sizes"]})
-    return [v[1] for v in best.values()], skipped
+    return [v[1] for v in best_map.values()], skipped
 
 
 def write_site(products, now):
