@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 
 LINE_RE = re.compile(r"^\[?(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)\]?\s*-?\s*([^:]{1,60}?):\s?(.*)$")
-ATT_RE = re.compile(r"([\w\-\. ]+?\.(?:jpe?g|png|webp|mp4|3gp|mov|opus|pdf))\s*\(file attached\)", re.I)
+ATT_RE = re.compile(r"([\w\-\. ]+?\.(?:jpe?g|png|webp|mp4|3gp|mov|opus|pdf))\s*\(file attached\)|<attached:\s*([^>\s]+)>", re.I)
 MEDIA_OMIT = re.compile(r"<?media omitted>?|(?:image|video|sticker|audio|gif) omitted|This message was deleted|<This message was edited>", re.I)
 STRIKE_RE = re.compile(r"~[^~\n]*~")
 BLOCK_LINE = re.compile(r"(^WITH MIYANI$|^\W*WITH ALL ACCESSORIES|SINGLES\s*&|MULTIPLE|LOOK LIKE|WITH ALL ACCESSORIES|NOTE\s*:|\bLESS\b|^\W*\d+\s*LESS|\bBOOK FAST|READY TO SHIP|\bDEAL OF THE\b|\bSELL\b|\bFINAL RATE\b|NO ANY LESS|LAUNCH|PRESENTING|ALHUMDULILAH|NEW DESIGNS?|STOCK|READY|NEW COLOUR|COLOUR & DESIGN|PRESEND|PRESENT|BEAUTIFUL COLOURS|BEAUTIFUL DESIGN|SUPERHIT|RESTOCK|@|https?:|www\.|whatsapp|\+?\d[\d\s-]{8,}\d|\baddress\b|\bstock (in|out|over)\b|community members|changed\. Tap)", re.I)
@@ -51,7 +51,7 @@ def parse_chat(text):
     return msgs
 
 def clean_text(t):
-    """Remove strikethrough (~..~), media placeholders, and file-attached names."""
+    files = [(m.group(1) or m.group(2)).strip() for m in ATT_RE.finditer(t)]
     files = [m.group(1).strip() for m in ATT_RE.finditer(t)]
     t = ATT_RE.sub("", t)
     t = MEDIA_OMIT.sub("", t)
@@ -132,7 +132,7 @@ def file_hash(p):
 
 
 def save_media(names, index):
-    images, video = [], None
+    images, videos = [], []
     for n in names:
         p = index.get(n)
         if p is None:
@@ -147,14 +147,15 @@ def save_media(names, index):
                         im.thumbnail((900, 900))
                         im.save(out, "JPEG", quality=80, optimize=True)
                 images.append(f"images/{out.name}")
-            elif ext == ".mp4" and video is None and p.stat().st_size <= MAX_VIDEO:
+            elif ext == ".mp4" and p.stat().st_size <= MAX_VIDEO:
                 out = VID_DIR / f"{file_hash(p)}.mp4"
                 if not out.exists():
                     shutil.copyfile(p, out)
-                video = f"videos/{out.name}"
+                if f"videos/{out.name}" not in videos:
+                    videos.append(f"videos/{out.name}")
         except Exception as e:
             print("media skip:", n, e)
-    return images, video
+    return images, videos
 
 
 def build(msgs, index, now):
@@ -180,9 +181,9 @@ def build(msgs, index, now):
             if s == m["sender"] and (m["time"] - t).total_seconds() <= PENDING_GAP:
                 names += fl
         pending = []
-        images, video = save_media(names, index)
+        images, videos = save_media(names, index)
         if not images:
-            skipped.append("photo nahi: " + prod["name"][:60])
+            skipped.append(f"photo nahi ({m['time']:%d-%m}): " + prod["name"][:60])
             continue
         key = (prod["name"].lower(), prod["description"].lower(), images[0])
         if key in best and best[key][0] >= m["time"]:
@@ -195,7 +196,7 @@ def build(msgs, index, now):
         best[key] = (m["time"], {
             "id": pid, "title": prod["name"], "raw": prod["name"], "text": prod["description"],
             "price": prod["price"] + mg, "date": m["time"].isoformat(), "category": "", "crop": "",
-            "images": images, "video": video, "sizes": prod["sizes"]})
+            "images": images, "videos": videos, "sizes": prod["sizes"]})
     return [v[1] for v in best.values()], skipped
 
 
@@ -254,6 +255,9 @@ def main():
         sys.exit(1)
     index = {p.name: p for p in ex.rglob("*") if p.is_file()}
     text = txts[0].read_text(encoding="utf-8", errors="ignore")
+    msgs = parse_chat(text)
+    print("chat range:", msgs[0]["time"], "to", msgs[-1]["time"], "| messages:", len(msgs), flush=True)
+    print("zip files:", len(index), flush=True)
     products, skipped = build(parse_chat(text), index, now)
     write_site(products, now)
     print(f"products: {len(products)}, skipped: {len(skipped)}")
