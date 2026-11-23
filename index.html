@@ -472,9 +472,9 @@ function pickSz(b){SZ=b.getAttribute("data-s");document.querySelectorAll(".szb")
 function addCart(){
   var p=CUR;if(!p)return;
   var f=null;
-  for(var i=0;i<CART.length;i++)if(CART[i].id===p.id)f=CART[i];
+  for(var i=0;i<CART.length;i++)if(CART[i].id===p.id&&CART[i].sz===SZ)f=CART[i];
   if(f)f.qty=Math.min(20,f.qty+QTY);
-  else CART.push({id:p.id,title:p.title,raw:p.raw||p.title,price:p.price,img:p.images[0],qty:QTY});
+  else CART.push({id:p.id,title:p.title,raw:p.raw||p.title,price:p.price,img:p.images[0],qty:QTY,sz:SZ});
   cartSave();cartBadge();toast("Added to cart");
 }
 function cartQty(i,d){var x=CART[i];if(!x)return;x.qty=Math.max(1,Math.min(20,x.qty+d));cartSave();cartBadge();renderCart()}
