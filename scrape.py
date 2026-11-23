@@ -190,6 +190,9 @@ def build(msgs, index, now):
         prod = it["prod"]
         images, videos = save_media(it["names"], index)
         if not images:
+            near = [(x["time"].strftime("%d %H:%M"), x["sender"][-4:], x["text"][:50].replace("\n", " "))
+                    for x in msgs if abs((x["time"] - it["time"]).total_seconds()) <= 900][:8]
+            print("NEAR", prod["name"][:30], near, flush=True)
             skipped.append(f"photo nahi ({it['time']:%d-%m}): " + prod["name"][:60])
             continue
         mg = margin_for(prod["price"])
