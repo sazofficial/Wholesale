@@ -186,6 +186,7 @@ def build(msgs, index, now):
         pending = []
         images, videos = save_media(names, index)
         if not images:
+            print("DBG", prod["name"][:30], "| names:", names, "| pending:", [(p[0].strftime("%d-%H:%M"), p[1][-4:], p[2]) for p in pending_before][:4], flush=True)
             skipped.append(f"photo nahi ({m['time']:%d-%m}): " + prod["name"][:60])
             continue
         key = (prod["name"].lower(), prod["description"].lower(), images[0])
