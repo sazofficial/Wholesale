@@ -136,6 +136,9 @@ def save_media(names, index):
     for n in names:
         p = index.get(n)
         if p is None:
+            low = {k.lower().strip(): k for k in index}
+            near = [k for k in index if k[-12:-4] in n][:3]
+            print("NOT FOUND:", repr(n), "| near:", near, flush=True)
             continue
         ext = p.suffix.lower()
         try:
@@ -154,7 +157,7 @@ def save_media(names, index):
                 if f"videos/{out.name}" not in videos:
                     videos.append(f"videos/{out.name}")
         except Exception as e:
-            print("media skip:", n, e)
+            print("media skip:", n, e, flush=True)
     return images, videos
 
 
