@@ -239,9 +239,14 @@ a.ft-a:hover{color:#fff}
 .szs{display:flex;flex-wrap:wrap;gap:8px}
 .szb{border:1.5px solid var(--ln);background:#fff;color:var(--dk);padding:8px 14px;border-radius:10px;font-weight:700;cursor:pointer;font-family:inherit}
 .szb.on{background:var(--g);color:#fff;border-color:transparent}
-.pn{margin:14px 0}
-.pn label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:#34535f}
-.pn input{width:100%;box-sizing:border-box;padding:12px;border:1.5px solid var(--ln);border-radius:10px;font:inherit;background:#fff}
+.pn{margin:18px 0 6px;padding:16px;border:1px solid var(--ln);border-radius:14px;background:#fafafa}
+.pn label{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#34535f;margin-bottom:10px}
+.pn label:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--g)}
+.pn input{width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid var(--ln);border-radius:10px;font:inherit;font-size:15px;background:#fff;color:var(--dk);outline:none;transition:border-color .2s,box-shadow .2s}
+.pn input::placeholder{color:#9aa5ab}
+.pn input:focus{border-color:var(--g);box-shadow:0 0 0 3px rgba(52,83,95,.12)}
+.szb{transition:transform .15s,background .2s}
+.szb:active{transform:scale(.96)}
 </style>
 </head>
 <body>
@@ -527,6 +532,7 @@ function showProduct(p){
     '<div class="pq"><span>Quantity</span><div class="qty"><button type="button" onclick="pqChg(-1)" aria-label="Decrease">&minus;</button><span id="pq">'+QTY+'</span><button type="button" onclick="pqChg(1)" aria-label="Increase">+</button></div></div>'+
     '<div class="bdg"><span>✓ Cash on Delivery</span><span>✓ Quality Checked</span><span>✓ Fast Delivery</span></div>'+
     (location.search.indexOf("saz97")>-1&&p.wholesaler?'<div class="wh">Wholesaler: '+esc(p.wholesaler)+'</div>':"")+
+    '<div class="pn"><label for="pn">Order note (optional)</label><input id="pn" placeholder="Size, colour, etc."></div>'+
     '<div class="pn"><label for="pn">Order note (optional)</label><input id="pn" placeholder="Size, colour, etc."></div>'+
     (p.text?'<div class="desc">'+esc(p.text)+'</div>':"")+
     '<div class="bx inl"><button type="button" class="btn btn2" onclick="addCart()">Add to Cart</button><a class="btn" href="#c/'+p.id+'">Buy Now</a>'+waBtn(p,"")+'</div></div></div>'+
