@@ -239,6 +239,9 @@ a.ft-a:hover{color:#fff}
 .szs{display:flex;flex-wrap:wrap;gap:8px}
 .szb{border:1.5px solid var(--ln);background:#fff;color:var(--dk);padding:8px 14px;border-radius:10px;font-weight:700;cursor:pointer;font-family:inherit}
 .szb.on{background:var(--g);color:#fff;border-color:transparent}
+.pn{margin:14px 0}
+.pn label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:#34535f}
+.pn input{width:100%;box-sizing:border-box;padding:12px;border:1.5px solid var(--ln);border-radius:10px;font:inherit;background:#fff}
 </style>
 </head>
 <body>
@@ -469,13 +472,17 @@ function szHtml(p){
   return '<div class="pq"><span>Size</span><div class="szs">'+p.sizes.map(function(s){return '<button type="button" class="szb'+(s===SZ?' on':'')+'" data-s="'+esc(s)+'" onclick="pickSz(this)">'+esc(s)+'</button>'}).join("")+'</div></div>';
 }
 function pickSz(b){SZ=b.getAttribute("data-s");document.querySelectorAll(".szb").forEach(function(x){x.classList.toggle("on",x===b)})}
+function addLine(p,q,note,sz){
+  var f=null;
+  for(var i=0;i<CART.length;i++)if(CART[i].id===p.id&&CART[i].sz===sz)f=CART[i];
+  if(f){f.qty=Math.min(20,f.qty+q);if(note)f.note=note}
+  else CART.push({id:p.id,title:p.title,raw:p.raw||p.title,price:p.price,img:p.images[0],qty:q,sz:sz,note:note||""});
+  cartSave();cartBadge();
+}
 function addCart(){
   var p=CUR;if(!p)return;
-  var f=null;
-  for(var i=0;i<CART.length;i++)if(CART[i].id===p.id&&CART[i].sz===SZ)f=CART[i];
-  if(f)f.qty=Math.min(20,f.qty+QTY);
-  else CART.push({id:p.id,title:p.title,raw:p.raw||p.title,price:p.price,img:p.images[0],qty:QTY,sz:SZ});
-  cartSave();cartBadge();toast("Added to cart");
+  addLine(p,QTY,($("pn")?$("pn").value.trim():""),SZ);
+  toast("Added to cart");
 }
 function cartQty(i,d){var x=CART[i];if(!x)return;x.qty=Math.max(1,Math.min(20,x.qty+d));cartSave();cartBadge();renderCart()}
 function cartDel(i){CART.splice(i,1);cartSave();cartBadge();renderCart()}
@@ -520,6 +527,7 @@ function showProduct(p){
     '<div class="pq"><span>Quantity</span><div class="qty"><button type="button" onclick="pqChg(-1)" aria-label="Decrease">&minus;</button><span id="pq">'+QTY+'</span><button type="button" onclick="pqChg(1)" aria-label="Increase">+</button></div></div>'+
     '<div class="bdg"><span>✓ Cash on Delivery</span><span>✓ Quality Checked</span><span>✓ Fast Delivery</span></div>'+
     (location.search.indexOf("saz97")>-1&&p.wholesaler?'<div class="wh">Wholesaler: '+esc(p.wholesaler)+'</div>':"")+
+    '<div class="pn"><label for="pn">Order note (optional)</label><input id="pn" placeholder="Size, colour, etc."></div>'+
     (p.text?'<div class="desc">'+esc(p.text)+'</div>':"")+
     '<div class="bx inl"><button type="button" class="btn btn2" onclick="addCart()">Add to Cart</button><a class="btn" href="#c/'+p.id+'">Buy Now</a>'+waBtn(p,"")+'</div></div></div>'+
     (SIM.length?'<h2 class="sh">You may also like</h2><div id="grid2">'+simH+'</div>':"")+'</div>'+
@@ -723,11 +731,10 @@ document.addEventListener("click",function(e){
   if(id==="cart")return;
   e.preventDefault();
   var add=function(p){
-    var f=null;
-    for(var i=0;i<CART.length;i++)if(CART[i].id===p.id)f=CART[i];
-    if(f)f.qty=Math.min(20,f.qty+QTY);
-    else CART.push({id:p.id,title:p.title,raw:p.raw||p.title,price:p.price,img:p.images[0],qty:QTY});
-    cartSave();cartBadge();
+    var onPage=(CUR&&CUR.id===p.id);
+    var sz=onPage?SZ:(p.sizes&&p.sizes.length?p.sizes[0]:"");
+    var note=(onPage&&$("pn"))?$("pn").value.trim():"";
+    addLine(p,QTY,note,sz);
     location.hash="#cart";
   };
   var p=(CUR&&CUR.id===id)?CUR:find(id);
