@@ -500,7 +500,7 @@ function showProduct(p){
   CUR=p;QTY=1;
   var cc=cropCls(p.crop||p.wholesaler);
   var sl=p.images.map(function(u){return '<div class="sl'+cc+'"><img src="'+esc(u)+'" alt="" onerror="this.style.opacity=0"></div>'});
-  if(p.video)sl.push('<div class="sl"><video class="pvideo" controls playsinline preload="metadata" src="'+esc(p.video)+'"></video></div>');
+  (p.videos||[]).forEach(function(v){sl.push('<div class="sl"><video class="pvideo" controls playsinline preload="metadata" src="'+esc(v)+'"></video></div>')});
   var n=sl.length,dots="",arrows="";
   if(n>1){
     dots='<div class="dots" id="dots">';
@@ -558,6 +558,7 @@ function showCheckout(p,cm){
     '<label for="fa">Full address (house no., street, area)</label><textarea id="fa" rows="3" autocomplete="street-address"></textarea>'+
     '<div class="two"><div><label for="fc">City</label><input id="fc" autocomplete="address-level2"></div><div><label for="fp">Pincode</label><input id="fp" type="tel" inputmode="numeric" maxlength="6" autocomplete="postal-code"></div></div>'+
     '<label for="fs">State</label><select id="fs">'+opts+'</select>'+
+    (!CKCART&&CUR&&CUR.sizes&&CUR.sizes.length?'<label for="fz">Size</label><select id="fz">'+CUR.sizes.map(function(s){return "<option"+(s===SZ?" selected":"")+">"+esc(s)+"</option>"}).join("")+'</select>':"")+
     '<label for="ft">Order note (optional)</label><input id="ft" placeholder="Size, colour, etc.">'+
     '<a href="#" onclick="clearBuyer();return false" style="display:inline-block;font-size:12px;color:var(--mu);margin-top:10px">Clear saved details</a>'+
     '<input id="fh" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true"></div>'+
@@ -584,7 +585,7 @@ function place(){
   var base="ORD-"+Date.now().toString(36).toUpperCase();
   var info={name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:note};
   var orders=items.map(function(it,i){
-    return{orderId:items.length>1?base+"-"+(i+1):base,productId:it.id,product:it.raw||it.title,price:it.price,qty:it.qty,total:it.price*it.qty,name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:note,website:v("fh")};
+    return{orderId:items.length>1?base+"-"+(i+1):base,productId:it.id,product:it.raw||it.title,price:it.price,qty:it.qty,total:it.price*it.qty,name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:note,size:(CKCART?"":($("fz")?$("fz").value:SZ)),website:v("fh")};
   });
   var tq=0,tt=0;items.forEach(function(it){tq+=it.qty;tt+=it.price*it.qty});
   var sum={orderId:base,product:items.map(function(it){return it.title}).join(", "),qty:tq,total:tt,mobile:mob};
