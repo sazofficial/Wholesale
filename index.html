@@ -515,6 +515,7 @@ function showProduct(p){
     '<div class="pg"><div><div class="galw"><div class="car" id="car">'+sl.join("")+'</div>'+arrows+'</div>'+dots+'</div>'+
     '<div class="info"><h1>'+esc(p.title)+'</h1>'+
     (p.category?'<div class="cchip">'+esc(p.category)+'</div>':"")+
+    szHtml(p)+
     '<div class="prow"><div class="price">'+inr(p.price)+'</div>'+shareBtn()+'</div>'+
     '<div class="pq"><span>Quantity</span><div class="qty"><button type="button" onclick="pqChg(-1)" aria-label="Decrease">&minus;</button><span id="pq">'+QTY+'</span><button type="button" onclick="pqChg(1)" aria-label="Increase">+</button></div></div>'+
     '<div class="bdg"><span>✓ Cash on Delivery</span><span>✓ Quality Checked</span><span>✓ Fast Delivery</span></div>'+
