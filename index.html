@@ -236,6 +236,9 @@ a.ft-a:hover{color:#fff}
 @media(min-width:980px){.rw .card{flex:0 0 20%;min-width:20%}}
 .pq{display:flex;align-items:center;justify-content:space-between;margin:16px 0}
 .pq>span:first-child{font-size:14px;font-weight:700;color:#34535f}
+.szs{display:flex;flex-wrap:wrap;gap:8px}
+.szb{border:1.5px solid var(--ln);background:#fff;color:var(--dk);padding:8px 14px;border-radius:10px;font-weight:700;cursor:pointer;font-family:inherit}
+.szb.on{background:var(--g);color:#fff;border-color:transparent}
 </style>
 </head>
 <body>
@@ -459,6 +462,13 @@ function cartCount(){var n=0;CART.forEach(function(x){n+=x.qty});return n}
 function cartTotal(){var n=0;CART.forEach(function(x){n+=x.price*x.qty});return n}
 function cartBadge(){var n=cartCount(),e=$("cn");if(!e)return;e.textContent=n;e.style.display=n?"flex":"none"}
 function pqChg(d){QTY=Math.max(1,Math.min(20,QTY+d));var e=$("pq");if(e)e.textContent=QTY}
+var SZ="";
+function szHtml(p){
+  SZ=(p.sizes&&p.sizes.length)?p.sizes[0]:"";
+  if(!p.sizes||!p.sizes.length)return "";
+  return '<div class="pq"><span>Size</span><div class="szs">'+p.sizes.map(function(s){return '<button type="button" class="szb'+(s===SZ?' on':'')+'" data-s="'+esc(s)+'" onclick="pickSz(this)">'+esc(s)+'</button>'}).join("")+'</div></div>';
+}
+function pickSz(b){SZ=b.getAttribute("data-s");document.querySelectorAll(".szb").forEach(function(x){x.classList.toggle("on",x===b)})}
 function addCart(){
   var p=CUR;if(!p)return;
   var f=null;
