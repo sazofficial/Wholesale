@@ -91,31 +91,61 @@ def parse_size(text):
         return []
     return sorted(found, key=lambda s: SIZE_ORDER.index(s))
 
+LABEL_BOLD = re.compile(r"^(FABRICS?|SIZES?|SINGLES?|NOTE|BOOK|READY|NO GST|SELL|DEAL|NEW DESIGNS|LOOK LIKE|PRESENTING|ALHUMDULILAH|FULL STOCK|RESTOCK|SUPERHIT DESIGNS|LENTH|DUPATTA|SHOP|ASSALAM|HIT DESIGN|SINGLES & MULTIPLE)", re.I)
+MARKETING = re.compile(r"LAUNCHING|BEAUTIFUL DESIGN|PRESENTING|ALHUMDULILAH|NEW LAUNCH|NO GST|BOOK FAST|READY TO SHIP|NOTE\s*:|WITH ALL ACCESSORIES|WITH MIYANI|SIZES? AVL|MENTION ON PIC", re.I)
+VARIANT_RE = re.compile(r"^([A-Z0-9][A-Z0-9.\-& ]{0,19}?)\s*:+\s*-?\s*(\d{3,5})\s*/?-?\s*$", re.I)
+PRODUCT_LIKE = re.compile(r"fabric|sizes?\s*:|singles?|mention on pic|book fast|ready to ship", re.I)
+
+
 def make_product(text, sender):
-    t = text
-    price = None
-    m = PRICE_NOW.search(t) or PRICE_SGL.search(t)
-    if m:
-        price = int(m.group(1).replace(",", ""))
-    if price is None or not (10 <= price <= 500000):
+    """Return (list_of_products, error). Har variant (jaise 246 :- 1750/-) ek alag product banta hai."""
+    raw_lines = [x.strip() for x in text.splitlines()]
+    variants = []
+    for l in raw_lines:
+        mv = VARIANT_RE.match(l.replace("*", "").strip())
+        if mv and not LABEL_BOLD.match(mv.group(1).strip()):
+            variants.append((mv.group(1).strip(), int(mv.group(2))))
+    single = PRICE_NOW.search(text) or PRICE_SGL.search(text)
+    if not variants and single:
+        variants = [(None, int(single.group(1).replace(",", "")))]
+    variants = [(c, p) for c, p in variants if 10 <= p <= 500000]
+    if not variants:
         return None, "price nahi"
-    lines = lines_of(t)
     name = None
-    bold = [x.strip().strip("*").strip() for x in t.splitlines() if x.strip().startswith("*") and x.strip().endswith("*")]
-    for c in bold:
-        if c and not HDR_RE.match(c) and ":" not in c and 4 <= len(c) <= 80 and not BLOCK_LINE.search(c) and not PRICE_SGL.search(c) and not SIZE_LINE.match(c) and not PRICE_NOW.search(c):
-            name = c; break
-    for l in ([] if name else lines):
-        c = l.strip()
-        if HDR_RE.match(c) or SIZE_LINE.match(c) or ":" in c or len(c) > 80 or len(c) < 4:
-            continue
-        name = c; break
+    for x in raw_lines:
+        if x.startswith("*") and x.endswith("*"):
+            c = x.strip("*").strip()
+            if c and not LABEL_BOLD.match(c) and ":" not in c and 4 <= len(c) <= 80 and not PRICE_SGL.search(c):
+                if re.search(r"\d", c):
+                    name = c
+                    break
+                name = name or c
+    if not name:
+        for l in lines_of(text):
+            c = l.strip()
+            if HDR_RE.match(c) or SIZE_LINE.match(c) or ":" in c or len(c) > 80 or len(c) < 4 or MARKETING.search(c):
+                continue
+            name = c
+            break
     if not name:
         return None, "naam nahi"
-    desc = [l for l in lines if l != name and not HDR_RE.match(l) and not re.fullmatch(r"(3XL|4XL|5XL|XXL|XL|XS|S|M|L)\s*\(\s*\d{2,3}\s*\)", l.strip(), re.I)
-            and not PRICE_NOW.search(l) and not PRICE_SGL.search(l)]
-    return {"name": name, "price": price, "sizes": parse_size(t),
-            "description": "\n".join(desc)[:1000]}, None
+    desc = []
+    for l in lines_of(text):
+        if l == name or HDR_RE.match(l) or MARKETING.search(l):
+            continue
+        if re.fullmatch(r"(3XL|4XL|5XL|XXL|XL|XS|S|M|L)\s*\(\s*\d{2,3}\s*\)", l.strip(), re.I):
+            continue
+        if PRICE_NOW.search(l) or PRICE_SGL.search(l) or VARIANT_RE.match(l.replace("*", "").strip()):
+            continue
+        desc.append(l)
+    desc_txt = "\n".join(desc)[:1000]
+    sizes = parse_size(text)
+    out = []
+    for code, price in variants:
+        title = name if code is None else f"{name} - {code}"
+        out.append({"name": title[:140], "price": price, "sizes": sizes,
+                    "description": desc_txt, "code": code or ""})
+    return out, None
 def margin_for(w):
     for s in SLABS:
         if w <= s["upto"]:
@@ -162,37 +192,39 @@ def save_media(names, index):
 
 
 def build(msgs, index, now):
-    """Admin ka pattern: pehle photo/video, phir description. Media ko agle product text se jodta hai,
-    agar agla na mile to pichhle se. GIF (update wala) ignore hota hai."""
+    """Admin ka pattern: pehle photo/video, phir description. Har variant alag product banta hai,
+    aur photo/video queue uske exact baad wale product text se judti hai."""
     cutoff = now - dt.timedelta(days=DAYS)
-    items, media, skipped = [], [], []
+    items, pending, skipped = [], [], []
     for m in msgs:
         files, text = clean_text(m["text"])
         files = [f for f in files if not f.upper().startswith("GIF")]
         if not text.strip():
             if files:
-                media.append((m["time"], m["sender"], files))
+                pending.append((m["time"], m["sender"], files))
             continue
-        prod, err = make_product(text, m["sender"])
-        if prod and m["time"] >= cutoff:
-            items.append({"time": m["time"], "sender": m["sender"], "prod": prod,
-                          "names": list(files)})
-    for t, s, fl in media:
-        gap = lambda it: (it["time"] - t).total_seconds()
-        after = [it for it in items if it["sender"] == s and 0 <= gap(it) <= PENDING_GAP]
-        before = [it for it in items if it["sender"] == s and -PENDING_GAP <= gap(it) < 0]
-        if after:
-            min(after, key=gap)["names"] += fl
-        elif before:
-            max(before, key=gap)["names"] += fl
+        if not PRODUCT_LIKE.search(text):
+            pending = []
+            continue
+        names = list(files)
+        for t, sender, fl in pending:
+            if sender == m["sender"] and (m["time"] - t).total_seconds() <= PENDING_GAP:
+                names += fl
+        pending = []
+        if m["time"] < cutoff:
+            continue
+        prods, err = make_product(text, m["sender"])
+        if not prods:
+            first = text.strip().splitlines()[0][:50]
+            skipped.append(f"{err} ({m['time']:%d-%m}): {first}")
+            continue
+        for prod in prods:
+            items.append({"time": m["time"], "prod": prod, "names": names})
     best_map = {}
     for it in items:
         prod = it["prod"]
         images, videos = save_media(it["names"], index)
         if not images:
-            near = [(x["time"].strftime("%d %H:%M"), x["sender"][-4:], x["text"][:50].replace("\n", " "))
-                    for x in msgs if abs((x["time"] - it["time"]).total_seconds()) <= 900][:8]
-            print("NEAR", prod["name"][:30], near, flush=True)
             skipped.append(f"photo nahi ({it['time']:%d-%m}): " + prod["name"][:60])
             continue
         mg = margin_for(prod["price"])
