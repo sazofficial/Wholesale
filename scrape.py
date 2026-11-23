@@ -183,6 +183,7 @@ def build(msgs, index, now):
         for t, s, fl in pending:
             if s == m["sender"] and (m["time"] - t).total_seconds() <= PENDING_GAP:
                 names += fl
+        pending_before = list(pending)
         pending = []
         images, videos = save_media(names, index)
         if not images:
