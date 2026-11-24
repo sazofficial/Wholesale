@@ -11,9 +11,12 @@ SETTINGS = json.loads(Path("settings.json").read_text(encoding="utf-8"))
 DAYS = int(SETTINGS.get("days", 15))
 SLABS = sorted(SETTINGS["slabs"], key=lambda s: s["upto"])
 PENDING_GAP = 900
-WORK, OUT = Path("work"), Path("public")
+TIME_WINDOW = 120
+MAX_VIDEO = 50 * 1024 * 1024
+CHUNK = 1024 * 1024
 BUDGET = 12 * 60
 DEADLINE = None
+WORK, OUT = Path("work"), Path("public")
 STORE = Path("store")
 ZIPS = STORE / "zips"
 PRODS = STORE / "products"
@@ -25,13 +28,10 @@ VID_DIR = STORE / "videos"
 
 class OutOfTime(Exception):
     pass
-MAX_VIDEO = 50 * 1024 * 1024
-import re, datetime as dt
-from zoneinfo import ZoneInfo
-IST = ZoneInfo("Asia/Kolkata")
+
 
 LINE_RE = re.compile(r"^\[?(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)\]?\s*-?\s*([^:]{1,60}?):\s?(.*)$")
-ATT_RE = re.compile(r"([\w\-\. ]+?\.(?:jpe?g|png|webp|mp4|3gp|mov|opus|pdf))\s*\(file attached\)|<attached:\s*([^>\s]+)>", re.I)
+ATT_RE = re.compile(r"([\w\-\. ]+?\.(?:jpe?g|png|webp|mp4|3gp|mov|opus|pdf))\s*\(file attached\)", re.I)
 MEDIA_OMIT = re.compile(r"<?media omitted>?|(?:image|video|sticker|audio|gif) omitted|This message was deleted|<This message was edited>", re.I)
 STRIKE_RE = re.compile(r"~[^~\n]*~")
 BLOCK_LINE = re.compile(r"(^WITH MIYANI$|^\W*WITH ALL ACCESSORIES|SINGLES\s*&|MULTIPLE|LOOK LIKE|WITH ALL ACCESSORIES|NOTE\s*:|\bLESS\b|^\W*\d+\s*LESS|\bBOOK FAST|READY TO SHIP|\bDEAL OF THE\b|\bSELL\b|\bFINAL RATE\b|NO ANY LESS|LAUNCH|PRESENTING|ALHUMDULILAH|NEW DESIGNS?|STOCK|READY|NEW COLOUR|COLOUR & DESIGN|PRESEND|PRESENT|BEAUTIFUL COLOURS|BEAUTIFUL DESIGN|SUPERHIT|RESTOCK|@|https?:|www\.|whatsapp|\+?\d[\d\s-]{8,}\d|\baddress\b|\bstock (in|out|over)\b|community members|changed\. Tap)", re.I)
@@ -41,68 +41,6 @@ PRICE_SGL = re.compile(r"(?<!now )singles?\s*[:@\-=]*\s*(?:₹|rs\.?)?\s*(\d[\d,
 SIZE_LINE = re.compile(r"^(3XL|4XL|5XL|XXL|XL|XS|S|M|L)\s*\(\s*\d{2,3}\s*\)$", re.I)
 SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
 SIZE_TOK = re.compile(r"\b(3XL|4XL|5XL|XXL|XL|XS|S|M|L)\b(?:\s*\(\s*\d{2,3}\s*\))?", re.I)
-
-def parse_dt(d, t):
-    s = re.sub(r"\s+", " ", f"{d} {t}").strip()
-    for fmt in ("%d/%m/%Y %H:%M:%S","%d/%m/%Y %H:%M","%d/%m/%y %H:%M:%S","%d/%m/%y %H:%M",
-                "%m/%d/%y %I:%M %p","%m/%d/%y %I:%M:%S %p","%m/%d/%Y %I:%M %p","%m/%d/%Y %H:%M","%m/%d/%y %H:%M"):
-        try: return dt.datetime.strptime(s, fmt).replace(tzinfo=IST)
-        except ValueError: pass
-    return None
-
-def parse_chat(text):
-    msgs = []
-    for raw in text.splitlines():
-        line = raw.replace("\u200e","").replace("\u202f"," ").replace("\u00a0"," ")
-        m = LINE_RE.match(line)
-        when = parse_dt(m.group(1), m.group(2)) if m else None
-        if m and when:
-            msgs.append({"time": when, "sender": m.group(3).strip(), "text": m.group(4)})
-        elif msgs:
-            msgs[-1]["text"] += "\n" + line
-    return msgs
-
-def clean_text(t):
-    files = [(m.group(1) or m.group(2)).strip() for m in ATT_RE.finditer(t)]
-    files = [m.group(1).strip() for m in ATT_RE.finditer(t)]
-    t = ATT_RE.sub("", t)
-    t = MEDIA_OMIT.sub("", t)
-    t = STRIKE_RE.sub("", t)
-    return files, t
-
-def lines_of(t):
-    out = []
-    for l in t.splitlines():
-        s = l.replace("*","").replace("_","").strip()
-        if not s or BLOCK_LINE.search(s):
-            continue
-        out.append(s)
-    return out
-
-def parse_size(text):
-    """Return list of sizes or ['FREE SIZE'] or [] if none stated in text."""
-    if re.search(r"free\s*size", text, re.I):
-        return ["FREE SIZE"]
-    found = set()
-    rng = re.search(r"\b(XS|S|M|L|XL)\s*(?:TO|-|–)\s*(3XL|XXL|XL|4XL|5XL)\b", text, re.I)
-    if rng:
-        a, b = rng.group(1).upper(), rng.group(2).upper()
-        ia, ib = SIZE_ORDER.index(a), SIZE_ORDER.index(b)
-        for k in SIZE_ORDER[ia:ib+1]: found.add(k)
-    lines = text.splitlines()
-    for i, l in enumerate(lines):
-        if re.search(r"size", l, re.I):
-            chunk = [l]
-            for nxt in lines[i+1:i+4]:
-                if not nxt.strip(): break
-                chunk.append(nxt)
-            for c in chunk:
-                for m in SIZE_TOK.finditer(c.upper()):
-                    found.add(m.group(1).upper())
-    if not found:
-        return []
-    return sorted(found, key=lambda s: SIZE_ORDER.index(s))
-
 LABEL_BOLD = re.compile(r"^(FABRICS?|SIZES?|SINGLES?|NOTE|BOOK|READY|NO GST|SELL|DEAL|NEW DESIGNS|LOOK LIKE|PRESENTING|ALHUMDULILAH|FULL STOCK|RESTOCK|SUPERHIT DESIGNS|LENTH|DUPATTA|SHOP|ASSALAM|HIT DESIGN|SINGLES & MULTIPLE)", re.I)
 MARKETING = re.compile(r"LAUNCHING|BEAUTIFUL DESIGN|PRESENTING|ALHUMDULILAH|NEW LAUNCH|NO GST|BOOK FAST|READY TO SHIP|NOTE\s*:|WITH ALL ACCESSORIES|WITH MIYANI|SIZES? AVL|MENTION ON PIC", re.I)
 VARIANT_RE = re.compile(r"^([A-Z0-9][A-Z0-9.\-& ]{0,19}?)\s*:+\s*-?\s*(\d{3,5})\s*/?-?\s*$", re.I)
@@ -112,8 +50,75 @@ RATE_RE = re.compile(r"\brate\s*[:\-=]*\s*(?:₹|rs\.?)?\s*-?\s*(\d[\d,]{2,6})",
 SIZE_ALIAS = {"XXXL": "3XL", "XXXXL": "4XL"}
 
 
+def parse_dt(d, t):
+    s = re.sub(r"\s+", " ", f"{d} {t}").strip()
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M",
+                "%m/%d/%y %I:%M %p", "%m/%d/%y %I:%M:%S %p", "%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M", "%m/%d/%y %H:%M"):
+        try:
+            return dt.datetime.strptime(s, fmt).replace(tzinfo=IST)
+        except ValueError:
+            pass
+    return None
+
+
+def parse_chat(text):
+    msgs = []
+    for raw in text.splitlines():
+        line = raw.replace("\u200e", "").replace("\u202f", " ").replace("\u00a0", " ")
+        m = LINE_RE.match(line)
+        when = parse_dt(m.group(1), m.group(2)) if m else None
+        if m and when:
+            msgs.append({"time": when, "sender": m.group(3).strip(), "text": m.group(4)})
+        elif msgs:
+            msgs[-1]["text"] += "\n" + line
+    return msgs
+
+
+def clean_text(t):
+    files = [(m.group(1) or m.group(2) or "").strip() for m in ATT_RE.finditer(t)]
+    t = ATT_RE.sub("", t)
+    t = MEDIA_OMIT.sub("", t)
+    t = STRIKE_RE.sub("", t)
+    return files, t
+
+
+def lines_of(t):
+    out = []
+    for l in t.splitlines():
+        s = l.replace("*", "").replace("_", "").strip()
+        if not s or BLOCK_LINE.search(s):
+            continue
+        out.append(s)
+    return out
+
+
 def clean_line(l):
     return EMOJI_RE.sub("", l).replace("*", "").replace("_", "").strip(" -–:|")
+
+
+def parse_size(text):
+    if re.search(r"free\s*size", text, re.I):
+        return ["FREE SIZE"]
+    found = set()
+    rng = re.search(r"\b(XS|S|M|L|XL)\s*(?:TO|-|–)\s*(3XL|XXL|XL|4XL|5XL)\b", text, re.I)
+    if rng:
+        a, b = rng.group(1).upper(), rng.group(2).upper()
+        for k in SIZE_ORDER[SIZE_ORDER.index(a):SIZE_ORDER.index(b) + 1]:
+            found.add(k)
+    lines = text.splitlines()
+    for i, l in enumerate(lines):
+        if re.search(r"size", l, re.I):
+            chunk = [l]
+            for nxt in lines[i + 1:i + 4]:
+                if not nxt.strip():
+                    break
+                chunk.append(nxt)
+            for c in chunk:
+                for m in SIZE_TOK.finditer(c.upper()):
+                    found.add(m.group(1).upper())
+    if not found:
+        return []
+    return sorted(found, key=lambda s: SIZE_ORDER.index(s))
 
 
 def make_product(text, sender):
@@ -169,6 +174,8 @@ def make_product(text, sender):
         out.append({"name": title[:140], "price": price, "sizes": sizes,
                     "description": desc_txt, "code": code or ""})
     return out, None
+
+
 def margin_for(w):
     for s in SLABS:
         if w <= s["upto"]:
@@ -189,9 +196,6 @@ def save_media(names, index):
     for n in names:
         p = index.get(n)
         if p is None:
-            low = {k.lower().strip(): k for k in index}
-            near = [k for k in index if k[-12:-4] in n][:3]
-            print("NOT FOUND:", repr(n), "| near:", near, flush=True)
             continue
         ext = p.suffix.lower()
         try:
@@ -202,7 +206,8 @@ def save_media(names, index):
                         im = im.convert("RGB")
                         im.thumbnail((900, 900))
                         im.save(out, "JPEG", quality=80, optimize=True)
-                images.append(f"images/{out.name}")
+                if f"images/{out.name}" not in images:
+                    images.append(f"images/{out.name}")
             elif ext == ".mp4" and p.stat().st_size <= MAX_VIDEO:
                 out = VID_DIR / f"{file_hash(p)}.mp4"
                 if not out.exists():
@@ -212,13 +217,9 @@ def save_media(names, index):
         except Exception as e:
             print("media skip:", n, e, flush=True)
     return images, videos
-
-
-TIME_WINDOW = 120
-
-
 def build(msgs, index, now):
-    """Media ko product text se TIME se jodta hai: +-2 minute ke andar, sabse nazdeek wala product."""
+    """Media ko product text se TIME se jodta hai: +-2 minute ke andar, sabse nazdeek wala product.
+    Variants alag products banenge, sab ki photos same."""
     cutoff = now - dt.timedelta(days=DAYS)
     items, media, skipped = [], [], []
     for m in msgs:
@@ -247,6 +248,7 @@ def build(msgs, index, now):
         best["names"] += fl
     best_map = {}
     for it in items:
+        prod = it["prod"]
         if DEADLINE and time.time() > DEADLINE:
             raise OutOfTime()
         images, videos = save_media(it["names"], index)
@@ -269,13 +271,11 @@ def build(msgs, index, now):
 
 
 def norm_key(prod):
-    """Cross-group dedupe ke liye: naam + price + description, sirf letters/digits."""
     f = lambda x: re.sub(r"[^a-z0-9]", "", x.lower())
     return f(prod["name"]) + "|" + str(prod["price"]) + "|" + f(prod["description"])
 
 
 def merge_groups(list_of_product_lists):
-    """Pehle group ke products jeetenge. Baad wale group me exact match hua to upload nahi."""
     seen, out = set(), []
     for plist in list_of_product_lists:
         for p in plist:
@@ -311,76 +311,19 @@ def group_key(name):
     return re.sub(r"\(\d+\)|\.zip$", "", n).strip()
 
 
-            k = group_key(f.name)
-            if k in got:
-                continue
-            path = WORK / f"zip{len(got)}.zip"
-            total, read, last = f.size, 0, 0
-            print("download shuru:", f.name, total // 1048576, "MB", flush=True)
-            with open(path, "wb") as out:
-                async for chunk in client.iter_download(msg.media, request_size=1024 * 1024):
-                    out.write(chunk)
-                    read += len(chunk)
-                    if read - last >= 50 * 1024 * 1024:
-                        print(f"download: {read // 1048576} MB / {total // 1048576} MB", flush=True)
-                        last = read
-            print("download poora hua:", f.name, flush=True)
-            got[k] = (f.name, path)
-    return list(got.values())
-
-
 def process_zip(zip_path, now, tag):
     ex = WORK / tag
     with zipfile.ZipFile(zip_path) as z:
         z.extractall(ex)
     txts = sorted(ex.rglob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
     if not txts:
-        print("txt nahi mili:", tag)
+        print("txt nahi mili:", tag, flush=True)
         return [], []
     index = {p.name: p for p in ex.rglob("*") if p.is_file()}
     text = txts[0].read_text(encoding="utf-8", errors="ignore")
     msgs = parse_chat(text)
     print(f"{tag} chat range:", msgs[0]["time"], "to", msgs[-1]["time"], "| messages:", len(msgs), flush=True)
     return build(msgs, index, now)
-
-
-def main():
-    now = dt.datetime.now(IST)
-    for d in (WORK, IMG_DIR, VID_DIR, OUT / "p"):
-        d.mkdir(parents=True, exist_ok=True)
-    chat_id = os.environ.get("TG_ZIP_CHANNEL")
-    if not chat_id:
-        print("TG_ZIP_CHANNEL set nahi hai")
-        sys.exit(1)
-    zips = asyncio.run(fetch_latest_per_group(chat_id))
-    if not zips:
-        print("Channel mein koi zip nahi mili")
-        sys.exit(1)
-    order = [o.lower() for o in SETTINGS.get("group_order", [])]
-
-    def prio(item):
-        n = item[0].lower()
-        for i, o in enumerate(order):
-            if o in n:
-                return i
-        return 99
-
-    lists, all_skipped = [], []
-    for idx, (name, path) in enumerate(sorted(zips, key=prio)):
-        tag = f"group{idx + 1}"
-        ps, sk = process_zip(path, now, tag)
-        print(f"{tag} ({name}) products:", len(ps), "skipped:", len(sk), flush=True)
-        lists.append(ps)
-        all_skipped += sk
-    products = merge_groups(lists)
-    write_site(products, now)
-    print(f"TOTAL products: {len(products)}, skipped: {len(all_skipped)}")
-    for x in all_skipped[:80]:
-        print(" -", x)
-    shutil.rmtree(WORK, ignore_errors=True)
-
-
-CHUNK = 1024 * 1024
 
 
 def mark_changed():
