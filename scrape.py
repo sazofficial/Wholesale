@@ -345,19 +345,28 @@ def main():
     now = dt.datetime.now(IST)
     for d in (WORK, IMG_DIR, VID_DIR, OUT / "p"):
         d.mkdir(parents=True, exist_ok=True)
-    chans = [c for c in (os.environ.get("TG_ZIP_CHANNEL"), os.environ.get("TG_ZIP_CHANNEL_2")) if c]
-    if not chans:
-        print("koi channel set nahi hai")
+    chat_id = os.environ.get("TG_ZIP_CHANNEL")
+    if not chat_id:
+        print("TG_ZIP_CHANNEL set nahi hai")
         sys.exit(1)
+    zips = asyncio.run(fetch_latest_per_group(chat_id))
+    if not zips:
+        print("Channel mein koi zip nahi mili")
+        sys.exit(1)
+    order = [o.lower() for o in SETTINGS.get("group_order", [])]
+
+    def prio(item):
+        n = item[0].lower()
+        for i, o in enumerate(order):
+            if o in n:
+                return i
+        return 99
+
     lists, all_skipped = [], []
-    for i, c in enumerate(chans):
-        tag = f"group{i + 1}"
-        zp = asyncio.run(fetch_zip(c, f"{tag}.zip"))
-        if zp is None:
-            print("zip nahi mili:", tag)
-            continue
-        ps, sk = process_zip(zp, now, tag)
-        print(f"{tag} products:", len(ps), "skipped:", len(sk), flush=True)
+    for idx, (name, path) in enumerate(sorted(zips, key=prio)):
+        tag = f"group{idx + 1}"
+        ps, sk = process_zip(path, now, tag)
+        print(f"{tag} ({name}) products:", len(ps), "skipped:", len(sk), flush=True)
         lists.append(ps)
         all_skipped += sk
     products = merge_groups(lists)
@@ -367,5 +376,7 @@ def main():
         print(" -", x)
     shutil.rmtree(WORK, ignore_errors=True)
 
+
 if __name__ == "__main__":
     main()
+    
