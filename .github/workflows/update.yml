@@ -1,8 +1,6 @@
 name: Build wholesale site
 
 on:
-  schedule:
-    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 27
     steps:
       - uses: actions/checkout@v4
 
@@ -28,18 +26,33 @@ jobs:
       - name: Install packages
         run: pip install telethon pillow
 
+      - name: Restore saved progress
+        uses: actions/cache/restore@v4
+        with:
+          path: store
+          key: store-${{ github.run_id }}
+          restore-keys: |
+            store-
+
       - name: Copy site files
         run: |
           mkdir -p public
-          rsync -a --exclude '.git' --exclude '.github' --exclude 'public' --exclude 'scrape.py' ./ public/
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'public' --exclude 'store' --exclude 'scrape.py' --exclude 'settings.json' ./ public/
 
-      - name: Build products from latest zip
+      - name: Process zips (time-boxed)
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           TG_ZIP_CHANNEL: ${{ secrets.TG_ZIP_CHANNEL }}
-        run: timeout 24m python -u scrape.py
+        run: timeout 16m python -u scrape.py || echo "scrape warning ke saath khatam hua"
+
+      - name: Save progress
+        if: hashFiles('store/changed.flag') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: store
+          key: store-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
