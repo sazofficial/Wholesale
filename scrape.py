@@ -14,7 +14,9 @@ PENDING_GAP = 900
 TIME_WINDOW = 120
 MAX_VIDEO = 50 * 1024 * 1024
 CHUNK = 1024 * 1024
-BUDGET = 12 * 60
+BUDGET = 19 * 60
+DL_BUDGET = 9 * 60
+DL_DEADLINE = None
 DEADLINE = None
 WORK, OUT = Path("work"), Path("public")
 STORE = Path("store")
@@ -368,7 +370,7 @@ async def download_resume(client, msg, cur, k, st):
             if (off // CHUNK) % 50 == 0:
                 save_state(st)
                 print(f"download {k}: {off // 1048576} / {cur['size'] // 1048576} MB", flush=True)
-            if time.time() > DEADLINE:
+            if time.time() > DL_DEADLINE:
                 break
     if off >= cur["size"]:
         cur["zip_done"] = True
@@ -381,18 +383,25 @@ async def sync_downloads(chat, st):
     async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
                               int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as client:
         latest = await list_latest(client, int(chat))
+        for old in [k for k in st if k not in latest]:
+            print("purana group hataya:", old, flush=True)
+            (ZIPS / f"{old}.zip").unlink(missing_ok=True)
+            (PRODS / f"{old}.json").unlink(missing_ok=True)
+            st.pop(old, None)
+            mark_changed()
         for k, info in latest.items():
             cur = st.get(k)
             if cur is None or cur["msg_id"] != info["msg_id"]:
                 st[k] = {"msg_id": info["msg_id"], "name": info["name"], "size": info["size"],
                          "offset": 0, "zip_done": False, "json_done": False}
                 (ZIPS / f"{k}.zip").unlink(missing_ok=True)
+                (PRODS / f"{k}.json").unlink(missing_ok=True)
                 mark_changed()
                 print("naya zip mila:", k, info["name"], flush=True)
         save_state(st)
         for k, info in latest.items():
             cur = st[k]
-            if cur["zip_done"] or time.time() > DEADLINE:
+            if cur["zip_done"] or time.time() > DL_DEADLINE:
                 continue
             await download_resume(client, info["msg"], cur, k, st)
 
@@ -475,8 +484,10 @@ def write_status(now):
 
 
 def main():
-    global DEADLINE
-    DEADLINE = time.time() + BUDGET
+    global DEADLINE, DL_DEADLINE
+    start = time.time()
+    DEADLINE = start + BUDGET
+    DL_DEADLINE = start + DL_BUDGET
     now = dt.datetime.now(IST)
     for d in (WORK, STORE, ZIPS, PRODS, IMG_DIR, VID_DIR, OUT / "p", OUT / "images", OUT / "videos"):
         d.mkdir(parents=True, exist_ok=True)
@@ -488,13 +499,13 @@ def main():
         print("ERROR TG_ZIP_CHANNEL secret set nahi hai", flush=True)
     else:
         try:
-            asyncio.run(sync_downloads(chat, st))
-        except Exception as e:
-            log_err("telegram download", e)
-        try:
             process_pending(st, now)
         except Exception as e:
             log_err("processing", e)
+        try:
+            asyncio.run(sync_downloads(chat, st))
+        except Exception as e:
+            log_err("telegram download", e)
         save_state(st)
     try:
         publish(st, now)
