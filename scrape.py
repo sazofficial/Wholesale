@@ -94,7 +94,14 @@ def parse_size(text):
 LABEL_BOLD = re.compile(r"^(FABRICS?|SIZES?|SINGLES?|NOTE|BOOK|READY|NO GST|SELL|DEAL|NEW DESIGNS|LOOK LIKE|PRESENTING|ALHUMDULILAH|FULL STOCK|RESTOCK|SUPERHIT DESIGNS|LENTH|DUPATTA|SHOP|ASSALAM|HIT DESIGN|SINGLES & MULTIPLE)", re.I)
 MARKETING = re.compile(r"LAUNCHING|BEAUTIFUL DESIGN|PRESENTING|ALHUMDULILAH|NEW LAUNCH|NO GST|BOOK FAST|READY TO SHIP|NOTE\s*:|WITH ALL ACCESSORIES|WITH MIYANI|SIZES? AVL|MENTION ON PIC", re.I)
 VARIANT_RE = re.compile(r"^([A-Z0-9][A-Z0-9.\-& ]{0,19}?)\s*:+\s*-?\s*(\d{3,5})\s*/?-?\s*$", re.I)
-PRODUCT_LIKE = re.compile(r"fabric|sizes?\s*:|singles?|mention on pic|book fast|ready to ship", re.I)
+PRODUCT_LIKE = re.compile(r"fabric|sizes?\b|singles?|rate|mention on pic|book fast|ready to ship|d\s*no", re.I)
+EMOJI_RE = re.compile("[\U0001F000-\U0001FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200d\u2122\u00A9\u00AE]")
+RATE_RE = re.compile(r"\brate\s*[:\-=]*\s*(?:₹|rs\.?)?\s*-?\s*(\d[\d,]{2,6})", re.I)
+SIZE_ALIAS = {"XXXL": "3XL", "XXXXL": "4XL"}
+
+
+def clean_line(l):
+    return EMOJI_RE.sub("", l).replace("*", "").replace("_", "").strip(" -–:|")
 
 
 def make_product(text, sender):
@@ -105,17 +112,19 @@ def make_product(text, sender):
         mv = VARIANT_RE.match(l.replace("*", "").strip())
         if mv and not LABEL_BOLD.match(mv.group(1).strip()):
             variants.append((mv.group(1).strip(), int(mv.group(2))))
-    single = PRICE_NOW.search(text) or PRICE_SGL.search(text)
+    single = PRICE_NOW.search(text) or PRICE_SGL.search(text) or RATE_RE.search(text)
     if not variants and single:
         variants = [(None, int(single.group(1).replace(",", "")))]
     variants = [(c, p) for c, p in variants if 10 <= p <= 500000]
     if not variants:
         return None, "price nahi"
     name = None
+    dno = re.search(r"d\.?\s*no\s*[:\-]*\s*\*?\s*([A-Za-z0-9\-\. ]{2,20})", text, re.I)
     for x in raw_lines:
-        if x.startswith("*") and x.endswith("*"):
-            c = x.strip("*").strip()
-            if c and not LABEL_BOLD.match(c) and ":" not in c and 4 <= len(c) <= 80 and not PRICE_SGL.search(c):
+        cx = clean_line(x)
+        if x.strip().startswith("*") and cx and not cx.startswith("("):
+            c = cx
+            if c and not LABEL_BOLD.match(c) and not re.search(r"DELIVERY|RATE|READY TO|BOOK|LIMITED|STOCK|LIST", c, re.I) and ":" not in c and 4 <= len(c) <= 80 and not PRICE_SGL.search(c):
                 if re.search(r"\d", c):
                     name = c
                     break
@@ -139,7 +148,9 @@ def make_product(text, sender):
             continue
         desc.append(l)
     desc_txt = "\n".join(desc)[:1000]
-    sizes = parse_size(text)
+    sizes = [SIZE_ALIAS.get(z, z) for z in parse_size(text)]
+    if dno and name and "D" not in name.upper().split():
+        name = f"{name} D.NO {dno.group(1).strip()}"[:140]
     out = []
     for code, price in variants:
         title = name if code is None else f"{name} - {code}"
@@ -191,41 +202,43 @@ def save_media(names, index):
     return images, videos
 
 
+TIME_WINDOW = 120
+
+
 def build(msgs, index, now):
-    """Admin ka pattern: pehle photo/video, phir description. Har variant alag product banta hai,
-    aur photo/video queue uske exact baad wale product text se judti hai."""
+    """Media ko product text se TIME se jodta hai: +-2 minute ke andar, sabse nazdeek wala product."""
     cutoff = now - dt.timedelta(days=DAYS)
-    items, pending, skipped = [], [], []
+    items, media, skipped = [], [], []
     for m in msgs:
         files, text = clean_text(m["text"])
         files = [f for f in files if not f.upper().startswith("GIF")]
         if not text.strip():
             if files:
-                pending.append((m["time"], m["sender"], files))
+                media.append((m["time"], files))
             continue
         if not PRODUCT_LIKE.search(text):
-            pending = []
             continue
-        names = list(files)
-        for t, sender, fl in pending:
-            if sender == m["sender"] and (m["time"] - t).total_seconds() <= PENDING_GAP:
-                names += fl
-        pending = []
         if m["time"] < cutoff:
             continue
         prods, err = make_product(text, m["sender"])
         if not prods:
-            first = text.strip().splitlines()[0][:50]
-            skipped.append(f"{err} ({m['time']:%d-%m}): {first}")
+            skipped.append(f"{err} ({m['time']:%d-%m %H:%M}): " + text.strip().splitlines()[0][:50])
             continue
         for prod in prods:
-            items.append({"time": m["time"], "prod": prod, "names": names})
+            items.append({"time": m["time"], "prod": prod, "names": list(files)})
+    for t, fl in media:
+        near = [it for it in items if abs((it["time"] - t).total_seconds()) <= TIME_WINDOW]
+        if not near:
+            continue
+        best = min(near, key=lambda it: (abs((it["time"] - t).total_seconds()),
+                                         (it["time"] - t).total_seconds() < 0))
+        best["names"] += fl
     best_map = {}
     for it in items:
         prod = it["prod"]
         images, videos = save_media(it["names"], index)
         if not images:
-            skipped.append(f"photo nahi ({it['time']:%d-%m}): " + prod["name"][:60])
+            skipped.append(f"photo nahi ({it['time']:%d-%m %H:%M}): " + prod["name"][:60])
             continue
         mg = margin_for(prod["price"])
         if mg is None:
@@ -238,8 +251,27 @@ def build(msgs, index, now):
         best_map[key] = (it["time"], {
             "id": pid, "title": prod["name"], "raw": prod["name"], "text": prod["description"],
             "price": prod["price"] + mg, "date": it["time"].isoformat(), "category": "", "crop": "",
-            "images": images, "videos": videos, "sizes": prod["sizes"]})
+            "images": images, "videos": videos, "sizes": prod["sizes"], "_key": norm_key(prod)})
     return [v[1] for v in best_map.values()], skipped
+
+
+def norm_key(prod):
+    """Cross-group dedupe ke liye: naam + price + description, sirf letters/digits."""
+    f = lambda x: re.sub(r"[^a-z0-9]", "", x.lower())
+    return f(prod["name"]) + "|" + str(prod["price"]) + "|" + f(prod["description"])
+
+
+def merge_groups(list_of_product_lists):
+    """Pehle group ke products jeetenge. Baad wale group me exact match hua to upload nahi."""
+    seen, out = set(), []
+    for plist in list_of_product_lists:
+        for p in plist:
+            k = p.pop("_key", None) or p["title"]
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+    return out
 
 
 def write_site(products, now):
@@ -258,58 +290,82 @@ def write_site(products, now):
     (OUT / "config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
 
 
-async def fetch_zip():
-    chat = int(os.environ["TG_ZIP_CHANNEL"])
+def group_key(name):
+    n = name.lower()
+    for o in SETTINGS.get("group_order", []):
+        if o.lower() in n:
+            return o.lower()
+    return re.sub(r"\(\d+\)|\.zip$", "", n).strip()
+
+
+async def fetch_latest_per_group(chat_id):
+    """Channel ki har group ki sabse nayi zip. Purani zip (same group ka) skip."""
+    chat = int(chat_id)
+    got = {}
     async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
                               int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as client:
-        async for msg in client.iter_messages(chat, limit=20):
+        async for msg in client.iter_messages(chat, limit=60):
             f = msg.file
-            if f and f.name and f.name.lower().endswith(".zip"):
-                path = WORK / "chat.zip"
-                total, got, last = f.size, 0, 0
-                print("download shuru:", total // 1048576, "MB", flush=True)
-                with open(path, "wb") as out:
-                    async for chunk in client.iter_download(msg.media, request_size=1024 * 1024):
-                        out.write(chunk)
-                        got += len(chunk)
-                        if got - last >= 20 * 1024 * 1024:
-                            print(f"download: {got // 1048576} MB / {total // 1048576} MB", flush=True)
-                            last = got
-                print("download poora hua", flush=True)
-                return path
-    return None
+            if not (f and f.name and f.name.lower().endswith(".zip")):
+                continue
+            k = group_key(f.name)
+            if k in got:
+                continue
+            path = WORK / f"zip{len(got)}.zip"
+            total, read, last = f.size, 0, 0
+            print("download shuru:", f.name, total // 1048576, "MB", flush=True)
+            with open(path, "wb") as out:
+                async for chunk in client.iter_download(msg.media, request_size=1024 * 1024):
+                    out.write(chunk)
+                    read += len(chunk)
+                    if read - last >= 50 * 1024 * 1024:
+                        print(f"download: {read // 1048576} MB / {total // 1048576} MB", flush=True)
+                        last = read
+            print("download poora hua:", f.name, flush=True)
+            got[k] = (f.name, path)
+    return list(got.values())
+
+
+def process_zip(zip_path, now, tag):
+    ex = WORK / tag
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(ex)
+    txts = sorted(ex.rglob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
+    if not txts:
+        print("txt nahi mili:", tag)
+        return [], []
+    index = {p.name: p for p in ex.rglob("*") if p.is_file()}
+    text = txts[0].read_text(encoding="utf-8", errors="ignore")
+    msgs = parse_chat(text)
+    print(f"{tag} chat range:", msgs[0]["time"], "to", msgs[-1]["time"], "| messages:", len(msgs), flush=True)
+    return build(msgs, index, now)
 
 
 def main():
     now = dt.datetime.now(IST)
     for d in (WORK, IMG_DIR, VID_DIR, OUT / "p"):
         d.mkdir(parents=True, exist_ok=True)
-    zip_path = asyncio.run(fetch_zip())
-    if zip_path is None:
-        print("Channel mein koi zip nahi mili")
+    chans = [c for c in (os.environ.get("TG_ZIP_CHANNEL"), os.environ.get("TG_ZIP_CHANNEL_2")) if c]
+    if not chans:
+        print("koi channel set nahi hai")
         sys.exit(1)
-    ex = WORK / "chat"
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(ex)
-    txts = sorted(ex.rglob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
-    if not txts:
-        print("zip mein chat ki txt file nahi mili")
-        sys.exit(1)
-    index = {p.name: p for p in ex.rglob("*") if p.is_file()}
-    text = txts[0].read_text(encoding="utf-8", errors="ignore")
-    msgs = parse_chat(text)
-    print("chat range:", msgs[0]["time"], "to", msgs[-1]["time"], "| messages:", len(msgs), flush=True)
-    print("zip files:", len(index), flush=True)
-    print("attached lines:", [l for l in text.splitlines() if "attached" in l.lower()][:5], flush=True)
-    print("attached count:", sum("attached" in l.lower() for l in text.splitlines()), flush=True)
-    print("zip media sample:", [n for n in index if n.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4"))][:8], flush=True)
-    products, skipped = build(parse_chat(text), index, now)
+    lists, all_skipped = [], []
+    for i, c in enumerate(chans):
+        tag = f"group{i + 1}"
+        zp = asyncio.run(fetch_zip(c, f"{tag}.zip"))
+        if zp is None:
+            print("zip nahi mili:", tag)
+            continue
+        ps, sk = process_zip(zp, now, tag)
+        print(f"{tag} products:", len(ps), "skipped:", len(sk), flush=True)
+        lists.append(ps)
+        all_skipped += sk
+    products = merge_groups(lists)
     write_site(products, now)
-    print(f"products: {len(products)}, skipped: {len(skipped)}")
-    for s in skipped[:80]:
-        print(" -", s)
+    print(f"TOTAL products: {len(products)}, skipped: {len(all_skipped)}")
+    for x in all_skipped[:80]:
+        print(" -", x)
     shutil.rmtree(WORK, ignore_errors=True)
-
 
 if __name__ == "__main__":
     main()
