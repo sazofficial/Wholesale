@@ -1,4 +1,4 @@
-import os, re, sys, json, zipfile, hashlib, asyncio, shutil, time
+import os, re, sys, json, zipfile, hashlib, asyncio, shutil, time, traceback
 import datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -409,6 +409,9 @@ def process_pending(st, now):
         except OutOfTime:
             print("processing agle run me continue hoga:", k, flush=True)
             return
+        except Exception as e:
+            log_err(f"group {k} processing", e)
+            continue
         PRODS.mkdir(parents=True, exist_ok=True)
         (PRODS / f"{k}.json").write_text(json.dumps(prods, ensure_ascii=False), encoding="utf-8")
         cur["json_done"] = True
@@ -453,6 +456,24 @@ def publish(st, now):
     print(f"SITE: {len(products)} products (groups: {keys})", flush=True)
 
 
+ERRORS = []
+
+
+def log_err(where, e):
+    tb = traceback.extract_tb(e.__traceback__)
+    loc = f"scrape.py line {tb[-1].lineno} (function {tb[-1].name})" if tb else "line unknown"
+    msg = f"{where}: {type(e).__name__}: {e} | {loc}"
+    print("ERROR", msg, flush=True)
+    traceback.print_exc()
+    ERRORS.append(msg)
+
+
+def write_status(now):
+    OUT.mkdir(parents=True, exist_ok=True)
+    data = {"time": now.strftime("%d %b %Y %H:%M IST"), "ok": not ERRORS, "errors": ERRORS}
+    (OUT / "status.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
 def main():
     global DEADLINE
     DEADLINE = time.time() + BUDGET
@@ -463,24 +484,31 @@ def main():
     st = load_state()
     chat = os.environ.get("TG_ZIP_CHANNEL")
     if not chat:
-        print("TG_ZIP_CHANNEL secret set nahi hai", flush=True)
+        ERRORS.append("TG_ZIP_CHANNEL secret set nahi hai")
+        print("ERROR TG_ZIP_CHANNEL secret set nahi hai", flush=True)
     else:
         try:
             asyncio.run(sync_downloads(chat, st))
         except Exception as e:
-            print("telegram warning:", repr(e), flush=True)
+            log_err("telegram download", e)
         try:
             process_pending(st, now)
         except Exception as e:
-            print("process warning:", repr(e), flush=True)
+            log_err("processing", e)
         save_state(st)
     try:
         publish(st, now)
     except Exception as e:
-        print("publish warning:", repr(e), flush=True)
+        log_err("publish", e)
+    if not (OUT / "first.json").exists():
+        try:
+            write_site([], now)
+        except Exception as e:
+            log_err("khali site files", e)
+    write_status(now)
     done = [k for k, c in st.items() if c["json_done"]]
     pending = [k for k, c in st.items() if not c["json_done"]]
-    print("READY:", done, "| PENDING:", pending, flush=True)
+    print("READY:", done, "| PENDING:", pending, "| ERRORS:", len(ERRORS), flush=True)
     shutil.rmtree(WORK, ignore_errors=True)
 
 
