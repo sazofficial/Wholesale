@@ -45,7 +45,7 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           TG_ZIP_CHANNEL: ${{ secrets.TG_ZIP_CHANNEL }}
-        run: timeout 16m python -u scrape.py || echo "scrape warning ke saath khatam hua"
+        run: timeout 16m python -u scrape.py
 
       - name: Save progress
         if: hashFiles('store/changed.flag') != ''
