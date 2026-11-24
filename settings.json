@@ -11,8 +11,9 @@
     {"upto": 5000, "add": 1000},
     {"upto": 10000, "add": 1500}
   ],
-  "days": 60,
-  "whatsapp": "918980161610",
+  "days": 30,
+  "group_order": ["sapphire", "z&a"],
+  "whatsapp": "919712236376",
   "shop_name": "SAZ",
   "order_url": "https://script.google.com/macros/s/AKfycbyS4-kS0zwY5qYmTCTWy2P874t1cTFpIhYuQi6sbl0kAwo_yxwMd8sduzseErq1g6IQ/exec",
   "block_words": []
