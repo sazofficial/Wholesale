@@ -206,8 +206,8 @@ def save_media(names, index):
                 if not out.exists():
                     with Image.open(p) as im:
                         im = im.convert("RGB")
-                        im.thumbnail((900, 900))
-                        im.save(out, "JPEG", quality=80, optimize=True)
+                        im.thumbnail((800, 800), Image.LANCZOS)
+                        im.save(out, "JPEG", quality=72, optimize=True, progressive=True)
                 if f"images/{out.name}" not in images:
                     images.append(f"images/{out.name}")
             elif ext == ".mp4" and p.stat().st_size <= MAX_VIDEO:
