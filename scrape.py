@@ -1,4 +1,4 @@
-import os, re, sys, json, zipfile, hashlib, asyncio, shutil
+import os, re, sys, json, zipfile, hashlib, asyncio, shutil, time
 import datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,7 +12,19 @@ DAYS = int(SETTINGS.get("days", 15))
 SLABS = sorted(SETTINGS["slabs"], key=lambda s: s["upto"])
 PENDING_GAP = 900
 WORK, OUT = Path("work"), Path("public")
-IMG_DIR, VID_DIR = OUT / "images", OUT / "videos"
+BUDGET = 12 * 60
+DEADLINE = None
+STORE = Path("store")
+ZIPS = STORE / "zips"
+PRODS = STORE / "products"
+STATE_F = STORE / "state.json"
+CHANGED = STORE / "changed.flag"
+IMG_DIR = STORE / "images"
+VID_DIR = STORE / "videos"
+
+
+class OutOfTime(Exception):
+    pass
 MAX_VIDEO = 50 * 1024 * 1024
 import re, datetime as dt
 from zoneinfo import ZoneInfo
@@ -235,7 +247,8 @@ def build(msgs, index, now):
         best["names"] += fl
     best_map = {}
     for it in items:
-        prod = it["prod"]
+        if DEADLINE and time.time() > DEADLINE:
+            raise OutOfTime()
         images, videos = save_media(it["names"], index)
         if not images:
             skipped.append(f"photo nahi ({it['time']:%d-%m %H:%M}): " + prod["name"][:60])
@@ -298,16 +311,6 @@ def group_key(name):
     return re.sub(r"\(\d+\)|\.zip$", "", n).strip()
 
 
-async def fetch_latest_per_group(chat_id):
-    """Channel ki har group ki sabse nayi zip. Purani zip (same group ka) skip."""
-    chat = int(chat_id)
-    got = {}
-    async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
-                              int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as client:
-        async for msg in client.iter_messages(chat, limit=60):
-            f = msg.file
-            if not (f and f.name and f.name.lower().endswith(".zip")):
-                continue
             k = group_key(f.name)
             if k in got:
                 continue
@@ -377,6 +380,163 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
 
 
+def mark_changed():
+    CHANGED.write_text("1")
+
+
+def load_state():
+    if STATE_F.exists():
+        return json.loads(STATE_F.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_state(st):
+    STATE_F.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+async def list_latest(client, chat):
+    got = {}
+    async for msg in client.iter_messages(chat, limit=80):
+        f = msg.file
+        if not (f and f.name and f.name.lower().endswith(".zip")):
+            continue
+        k = group_key(f.name)
+        if k not in got:
+            got[k] = {"msg": msg, "msg_id": msg.id, "name": f.name, "size": f.size}
+    return got
+
+
+async def download_resume(client, msg, cur, k, st):
+    ZIPS.mkdir(parents=True, exist_ok=True)
+    path = ZIPS / f"{k}.zip"
+    off = cur["offset"]
+    print(f"download {k}: {off // 1048576} MB se shuru", flush=True)
+    mode = "r+b" if path.exists() else "wb"
+    with open(path, mode) as f:
+        f.seek(off)
+        f.truncate()
+        async for chunk in client.iter_download(msg.media, offset=off, request_size=CHUNK):
+            f.write(chunk)
+            off += len(chunk)
+            cur["offset"] = off
+            if (off // CHUNK) % 50 == 0:
+                save_state(st)
+                print(f"download {k}: {off // 1048576} / {cur['size'] // 1048576} MB", flush=True)
+            if time.time() > DEADLINE:
+                break
+    if off >= cur["size"]:
+        cur["zip_done"] = True
+        print("download poora:", k, flush=True)
+    save_state(st)
+    mark_changed()
+
+
+async def sync_downloads(chat, st):
+    async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
+                              int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as client:
+        latest = await list_latest(client, int(chat))
+        for k, info in latest.items():
+            cur = st.get(k)
+            if cur is None or cur["msg_id"] != info["msg_id"]:
+                st[k] = {"msg_id": info["msg_id"], "name": info["name"], "size": info["size"],
+                         "offset": 0, "zip_done": False, "json_done": False}
+                (ZIPS / f"{k}.zip").unlink(missing_ok=True)
+                mark_changed()
+                print("naya zip mila:", k, info["name"], flush=True)
+        save_state(st)
+        for k, info in latest.items():
+            cur = st[k]
+            if cur["zip_done"] or time.time() > DEADLINE:
+                continue
+            await download_resume(client, info["msg"], cur, k, st)
+
+
+def process_pending(st, now):
+    for k, cur in st.items():
+        if not cur["zip_done"] or cur["json_done"]:
+            continue
+        if time.time() > DEADLINE:
+            print("time khatam, processing agle run me:", k, flush=True)
+            return
+        try:
+            prods, skipped = process_zip(ZIPS / f"{k}.zip", now, k)
+        except OutOfTime:
+            print("processing agle run me continue hoga:", k, flush=True)
+            return
+        PRODS.mkdir(parents=True, exist_ok=True)
+        (PRODS / f"{k}.json").write_text(json.dumps(prods, ensure_ascii=False), encoding="utf-8")
+        cur["json_done"] = True
+        (ZIPS / f"{k}.zip").unlink(missing_ok=True)
+        shutil.rmtree(WORK / k, ignore_errors=True)
+        save_state(st)
+        mark_changed()
+        print(f"{k} ready | products: {len(prods)} | skipped: {len(skipped)}", flush=True)
+        for x in skipped[:30]:
+            print("  -", x, flush=True)
+
+
+def publish(st, now):
+    order = [o.lower() for o in SETTINGS.get("group_order", [])]
+    keys = [p.stem for p in PRODS.glob("*.json")]
+    if not keys:
+        print("koi group ready nahi, site purani hi rahegi", flush=True)
+        return
+    keys.sort(key=lambda k: next((i for i, o in enumerate(order) if o in k), 99))
+    cutoff = now - dt.timedelta(days=DAYS)
+    lists = []
+    for k in keys:
+        arr = json.loads((PRODS / f"{k}.json").read_text(encoding="utf-8"))
+        lists.append([p for p in arr if dt.datetime.fromisoformat(p["date"]) >= cutoff])
+    products = merge_groups(lists)
+    write_site(products, now)
+    used = set()
+    for p in products:
+        used.update(p["images"])
+        used.update(p["videos"])
+    for rel in used:
+        src, dst = STORE / rel, OUT / rel
+        if src.exists() and not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+    if all(c["json_done"] for c in st.values()):
+        for folder, sub in ((IMG_DIR, "images"), (VID_DIR, "videos")):
+            for f in folder.glob("*"):
+                if f"{sub}/{f.name}" not in used:
+                    f.unlink(missing_ok=True)
+                    mark_changed()
+    print(f"SITE: {len(products)} products (groups: {keys})", flush=True)
+
+
+def main():
+    global DEADLINE
+    DEADLINE = time.time() + BUDGET
+    now = dt.datetime.now(IST)
+    for d in (WORK, STORE, ZIPS, PRODS, IMG_DIR, VID_DIR, OUT / "p", OUT / "images", OUT / "videos"):
+        d.mkdir(parents=True, exist_ok=True)
+    CHANGED.unlink(missing_ok=True)
+    st = load_state()
+    chat = os.environ.get("TG_ZIP_CHANNEL")
+    if not chat:
+        print("TG_ZIP_CHANNEL secret set nahi hai", flush=True)
+    else:
+        try:
+            asyncio.run(sync_downloads(chat, st))
+        except Exception as e:
+            print("telegram warning:", repr(e), flush=True)
+        try:
+            process_pending(st, now)
+        except Exception as e:
+            print("process warning:", repr(e), flush=True)
+        save_state(st)
+    try:
+        publish(st, now)
+    except Exception as e:
+        print("publish warning:", repr(e), flush=True)
+    done = [k for k, c in st.items() if c["json_done"]]
+    pending = [k for k, c in st.items() if not c["json_done"]]
+    print("READY:", done, "| PENDING:", pending, flush=True)
+    shutil.rmtree(WORK, ignore_errors=True)
+
+
 if __name__ == "__main__":
     main()
-    
