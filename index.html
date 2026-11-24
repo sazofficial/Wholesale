@@ -236,9 +236,16 @@ a.ft-a:hover{color:#fff}
 @media(min-width:980px){.rw .card{flex:0 0 20%;min-width:20%}}
 .pq{display:flex;align-items:center;justify-content:space-between;margin:16px 0}
 .pq>span:first-child{font-size:14px;font-weight:700;color:#34535f}
-.szs{display:flex;flex-wrap:wrap;gap:8px}
-.szb{border:1.5px solid var(--ln);background:#fff;color:var(--dk);padding:8px 14px;border-radius:10px;font-weight:700;cursor:pointer;font-family:inherit}
-.szb.on{background:var(--g);color:#fff;border-color:transparent}
+.szbox{margin:18px 0 6px;padding:16px;border-radius:14px;background:linear-gradient(135deg,#f4f8f9,#fff);border:1.5px dashed var(--g)}
+.szh{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--g);margin-bottom:12px}
+.szh em{font-style:normal;font-size:11px;background:var(--g);color:#fff;padding:4px 10px;border-radius:20px;letter-spacing:.04em}
+.szs{display:flex;flex-wrap:wrap;gap:10px}
+.szb{min-width:60px;height:50px;padding:0 20px;border:2px solid var(--g);background:#fff;color:var(--g);border-radius:12px;font-weight:800;font-size:15px;cursor:pointer;font-family:inherit;transition:transform .2s,box-shadow .2s,background .2s;box-shadow:0 3px 8px rgba(52,83,95,.14)}
+.szb:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(52,83,95,.22)}
+.szb:active{transform:scale(.96)}
+.szb.on{background:var(--g);color:#fff;box-shadow:0 8px 18px rgba(52,83,95,.35)}
+.szb.pulse{animation:szp 1.8s ease-in-out 3}
+@keyframes szp{0%,100%{box-shadow:0 0 0 0 rgba(52,83,95,.4)}50%{box-shadow:0 0 0 9px rgba(52,83,95,0)}}
 .pn{margin:18px 0 6px;padding:16px;border:1px solid var(--ln);border-radius:14px;background:#fafafa}
 .pn label{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#34535f;margin-bottom:10px}
 .pn label:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--g)}
@@ -474,9 +481,16 @@ var SZ="";
 function szHtml(p){
   SZ=(p.sizes&&p.sizes.length)?p.sizes[0]:"";
   if(!p.sizes||!p.sizes.length)return "";
-  return '<div class="pq"><span>Size</span><div class="szs">'+p.sizes.map(function(s){return '<button type="button" class="szb'+(s===SZ?' on':'')+'" data-s="'+esc(s)+'" onclick="pickSz(this)">'+esc(s)+'</button>'}).join("")+'</div></div>';
+  var free=p.sizes.length===1&&p.sizes[0]==="FREE SIZE";
+  return '<div class="szbox"><div class="szh"><span>Size chunein</span><em>'+(free?'Free Size':'Zaroori')+'</em></div><div class="szs">'+p.sizes.map(function(s){return '<button type="button" class="szb'+(s===SZ?' on':' pulse')+'" data-s="'+esc(s)+'" onclick="pickSz(this)">'+esc(s)+'</button>'}).join("")+'</div></div>';
 }
-function pickSz(b){SZ=b.getAttribute("data-s");document.querySelectorAll(".szb").forEach(function(x){x.classList.toggle("on",x===b)})}
+function pickSz(b){
+  SZ=b.getAttribute("data-s");
+  document.querySelectorAll(".szb").forEach(function(x){
+    x.classList.toggle("on",x===b);
+    x.classList.remove("pulse");
+  });
+}
 function addLine(p,q,note,sz){
   var f=null;
   for(var i=0;i<CART.length;i++)if(CART[i].id===p.id&&CART[i].sz===sz)f=CART[i];
@@ -532,7 +546,6 @@ function showProduct(p){
     '<div class="pq"><span>Quantity</span><div class="qty"><button type="button" onclick="pqChg(-1)" aria-label="Decrease">&minus;</button><span id="pq">'+QTY+'</span><button type="button" onclick="pqChg(1)" aria-label="Increase">+</button></div></div>'+
     '<div class="bdg"><span>✓ Cash on Delivery</span><span>✓ Quality Checked</span><span>✓ Fast Delivery</span></div>'+
     (location.search.indexOf("saz97")>-1&&p.wholesaler?'<div class="wh">Wholesaler: '+esc(p.wholesaler)+'</div>':"")+
-    '<div class="pn"><label for="pn">Order note (optional)</label><input id="pn" placeholder="Size, colour, etc."></div>'+
     '<div class="pn"><label for="pn">Order note (optional)</label><input id="pn" placeholder="Size, colour, etc."></div>'+
     (p.text?'<div class="desc">'+esc(p.text)+'</div>':"")+
     '<div class="bx inl"><button type="button" class="btn btn2" onclick="addCart()">Add to Cart</button><a class="btn" href="#c/'+p.id+'">Buy Now</a>'+waBtn(p,"")+'</div></div></div>'+
