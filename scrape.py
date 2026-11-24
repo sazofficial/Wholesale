@@ -380,6 +380,9 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
 
 
+CHUNK = 1024 * 1024
+
+
 def mark_changed():
     CHANGED.write_text("1")
 
@@ -398,7 +401,7 @@ async def list_latest(client, chat):
     got = {}
     async for msg in client.iter_messages(chat, limit=80):
         f = msg.file
-        if not (f and f.name and f.name.lower().endswith(".zip")):
+        if f is None or not f.name or not f.name.lower().endswith(".zip"):
             continue
         k = group_key(f.name)
         if k not in got:
