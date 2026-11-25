@@ -274,9 +274,10 @@ def build(msgs, index, now):
         if key in best_map and best_map[key][0] >= it["time"]:
             continue
         pid = "p" + hashlib.sha1("|".join(key).encode("utf-8")).hexdigest()[:8]
+        cat = detect_category(prod["name"], prod["description"], prod["sizes"])
         best_map[key] = (it["time"], {
             "id": pid, "title": prod["name"], "raw": prod["name"], "text": prod["description"],
-            "price": prod["price"] + mg, "date": it["time"].isoformat(), "category": "", "crop": "",
+            "price": prod["price"] + mg, "date": it["time"].isoformat(), "category": cat, "crop": "",
             "images": images, "videos": videos, "sizes": prod["sizes"], "_key": norm_key(prod)})
     return [v[1] for v in best_map.values()], skipped
 
@@ -301,7 +302,8 @@ def merge_groups(list_of_product_lists):
 def write_site(products, now):
     products.sort(key=lambda p: p["date"], reverse=True)
     compact = [{"i": p["id"], "t": p["title"], "p": p["price"], "d": p["date"],
-                "k": p["text"], "m": p["images"][0]} for p in products]
+                "k": p["text"], "m": p["images"][0], "c": p.get("category", ""),
+                "s": p.get("sizes", [])} for p in products]
     (OUT / "first.json").write_text(json.dumps(compact[:40], ensure_ascii=False), encoding="utf-8")
     (OUT / "light.json").write_text(json.dumps(compact, ensure_ascii=False), encoding="utf-8")
     buckets = {c: [] for c in "0123456789abcdef"}
@@ -335,6 +337,149 @@ def process_zip(zip_path, now, tag):
     msgs = parse_chat(text)
     print(f"{tag} chat range:", msgs[0]["time"], "to", msgs[-1]["time"], "| messages:", len(msgs), flush=True)
     return build(msgs, index, now)
+
+
+def detect_category(title, text, sizes):
+    """Classify product. No size → Unstitched. Else keyword match → category."""
+    t = (title + " " + (text or "")).lower()
+    if re.search(r"sharara|gharara", t): return "Sharara & Gharara"
+    if re.search(r"palazzo", t): return "Palazzo Sets"
+    if re.search(r"kurti", t): return "Kurtis"
+    if re.search(r"party|wedding|bridal", t): return "Party Wear"
+    if re.search(r"salwar|kameez|suit", t): return "Salwar Kameez"
+    if not sizes: return "Unstitched"
+    return "Other"
+
+
+def _libas_get(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "SAZ-Sync/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def fetch_libas_products():
+    out = []
+    for page in range(1, LIBAS_PAGES + 1):
+        try:
+            raw = _libas_get(f"{LIBAS_API}?per_page=100&page={page}")
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            print(f"Libas fetch page {page} error: {e}", flush=True)
+            break
+        if not isinstance(data, list) or not data:
+            break
+        out.extend(data)
+        if len(data) < 100:
+            break
+    return out
+
+
+def download_libas_image(url):
+    h = hashlib.sha1(url.encode()).hexdigest()[:12]
+    out = IMG_DIR / f"lb{h}.jpg"
+    if out.exists():
+        return f"images/{out.name}"
+    try:
+        data = _libas_get(url)
+        tmp = WORK / f"tmp_lb_{h}.jpg"
+        tmp.write_bytes(data)
+        with Image.open(tmp) as im:
+            im = im.convert("RGB")
+            im.thumbnail((800, 800), Image.LANCZOS)
+            im.save(out, "JPEG", quality=72, optimize=True, progressive=True)
+        tmp.unlink(missing_ok=True)
+        return f"images/{out.name}"
+    except Exception as e:
+        print(f"Libas image skip: {e}", flush=True)
+        return None
+
+
+def _libas_price(prices):
+    try:
+        return int(prices.get("price") or 0) // 100
+    except (ValueError, TypeError):
+        return 0
+
+
+def _libas_desc(raw):
+    """Prefer short_description (real product details). HTML → newlines."""
+    html_src = raw.get("short_description") or raw.get("description") or ""
+    if not html_src:
+        return ""
+    s = re.sub(r"</(p|div|tr|li|h[1-6])>", "\n", html_src, flags=re.I)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"</t[dh]>", ": ", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = _html.unescape(s)
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n\s*\n+", "\n", s)
+    return s.strip()[:1200]
+
+
+def convert_libas_product(raw, now, start_time):
+    try:
+        name = (raw.get("name") or "").strip()
+        if not name:
+            return None
+        base_price = _libas_price(raw.get("prices") or {})
+        if base_price < 10 or base_price > 500000:
+            return None
+        mg = margin_for(base_price)
+        if mg is None:
+            print(f"Libas skip (slab out): {name[:40]} @ {base_price}", flush=True)
+            return None
+        final_price = base_price + mg
+        images = []
+        for img in (raw.get("images") or []):
+            if time.time() - start_time > LIBAS_TIME_LIMIT:
+                break
+            src = img.get("src")
+            if src:
+                local = download_libas_image(src)
+                if local:
+                    images.append(local)
+        if not images:
+            return None
+        sizes = []
+        for attr in (raw.get("attributes") or []):
+            if (attr.get("name") or "").lower() == "size":
+                sizes = [t.get("name", "").strip() for t in (attr.get("terms") or []) if t.get("name")]
+        desc = _libas_desc(raw)
+        category = detect_category(name, desc, sizes)
+        date_str = raw.get("date_created") or raw.get("date_modified") or now.isoformat()
+        libas_id = raw.get("id", "")
+        pid = "p" + hashlib.sha1(f"libas-{libas_id}".encode()).hexdigest()[:8]
+        return {
+            "id": pid, "title": name[:140], "raw": name, "text": desc,
+            "price": final_price, "date": date_str, "category": category, "crop": "",
+            "images": images, "videos": [], "sizes": sizes,
+        }
+    except Exception as e:
+        print(f"Libas convert error: {e}", flush=True)
+        return None
+
+
+def sync_libas(now):
+    start = time.time()
+    print("Libas sync: starting", flush=True)
+    try:
+        raws = fetch_libas_products()
+    except Exception as e:
+        print(f"Libas fetch failed: {e}", flush=True)
+        return
+    print(f"Libas sync: fetched {len(raws)} raw products", flush=True)
+    converted = []
+    for raw in raws:
+        if time.time() - start > LIBAS_TIME_LIMIT:
+            print("Libas sync: time limit hit", flush=True)
+            break
+        p = convert_libas_product(raw, now, start)
+        if p:
+            converted.append(p)
+    print(f"Libas sync: {len(converted)} products ready", flush=True)
+    PRODS.mkdir(parents=True, exist_ok=True)
+    (PRODS / "libas.json").write_text(json.dumps(converted, ensure_ascii=False), encoding="utf-8")
+    mark_changed()
 
 
 def mark_changed():
@@ -472,148 +617,6 @@ def publish(st, now):
                     f.unlink(missing_ok=True)
                     mark_changed()
     print(f"SITE: {len(products)} products (groups: {keys})", flush=True)
-
-
-# ============================================================
-# LIBAS SYNC  (public Store API, margin same as WhatsApp)
-# ============================================================
-
-def _libas_get(url, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": "SAZ-Sync/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-def fetch_libas_products():
-    """Fetch all products from Libas public Store API (paginated)."""
-    out = []
-    for page in range(1, LIBAS_PAGES + 1):
-        try:
-            raw = _libas_get(f"{LIBAS_API}?per_page=100&page={page}")
-            data = json.loads(raw.decode("utf-8"))
-        except Exception as e:
-            print(f"Libas fetch page {page} error: {e}", flush=True)
-            break
-        if not isinstance(data, list) or not data:
-            break
-        out.extend(data)
-        if len(data) < 100:
-            break
-    return out
-
-
-def download_libas_image(url):
-    """Download + compress one Libas image. Return 'images/xxxx.jpg' or None."""
-    h = hashlib.sha1(url.encode()).hexdigest()[:12]
-    out = IMG_DIR / f"lb{h}.jpg"
-    if out.exists():
-        return f"images/{out.name}"
-    try:
-        data = _libas_get(url)
-        tmp = WORK / f"tmp_lb_{h}.jpg"
-        tmp.write_bytes(data)
-        with Image.open(tmp) as im:
-            im = im.convert("RGB")
-            im.thumbnail((800, 800), Image.LANCZOS)
-            im.save(out, "JPEG", quality=72, optimize=True, progressive=True)
-        tmp.unlink(missing_ok=True)
-        return f"images/{out.name}"
-    except Exception as e:
-        print(f"Libas image skip: {e}", flush=True)
-        return None
-
-
-def _libas_price(prices):
-    """WC Store API returns minor units (paise). /100 for rupees."""
-    try:
-        return int(prices.get("price") or 0) // 100
-    except (ValueError, TypeError):
-        return 0
-
-
-def convert_libas_product(raw, now, start_time):
-    """Convert one Libas product to internal shape (with margin, same as WhatsApp)."""
-    try:
-        name = (raw.get("name") or "").strip()
-        if not name:
-            return None
-        base_price = _libas_price(raw.get("prices") or {})
-        if base_price < 10 or base_price > 500000:
-            return None
-        mg = margin_for(base_price)
-        if mg is None:
-            print(f"Libas skip (slab out): {name[:40]} @ {base_price}", flush=True)
-            return None
-        final_price = base_price + mg
-        # Images (max 3)
-        images = []
-        for img in (raw.get("images") or [])[:3]:
-            if time.time() - start_time > LIBAS_TIME_LIMIT:
-                break
-            src = img.get("src")
-            if src:
-                local = download_libas_image(src)
-                if local:
-                    images.append(local)
-        if not images:
-            return None
-        # Sizes from attributes
-        sizes = []
-        for attr in (raw.get("attributes") or []):
-            if (attr.get("name") or "").lower() == "size":
-                sizes = [t.get("name", "").strip() for t in (attr.get("terms") or []) if t.get("name")]
-        # Description (strip HTML)
-        desc_html = raw.get("description") or ""
-        desc = _html.unescape(re.sub(r"<[^>]+>", " ", desc_html))
-        desc = re.sub(r"\s+", " ", desc).strip()[:1000]
-        # Category
-        cats = raw.get("categories") or []
-        category = (cats[0].get("name") or "").strip() if cats else ""
-        # Date
-        date_str = raw.get("date_created") or raw.get("date_modified") or now.isoformat()
-        # ID (same pattern as WhatsApp so p/<bucket>.json works)
-        libas_id = raw.get("id", "")
-        pid = "p" + hashlib.sha1(f"libas-{libas_id}".encode()).hexdigest()[:8]
-        return {
-            "id": pid,
-            "title": name[:140],
-            "raw": name,
-            "text": desc,
-            "price": final_price,
-            "date": date_str,
-            "category": category,
-            "crop": "",
-            "images": images,
-            "videos": [],
-            "sizes": sizes,
-        }
-    except Exception as e:
-        print(f"Libas convert error: {e}", flush=True)
-        return None
-
-
-def sync_libas(now):
-    """Fetch Libas, convert (with margin), save store/products/libas.json."""
-    start = time.time()
-    print("Libas sync: starting", flush=True)
-    try:
-        raws = fetch_libas_products()
-    except Exception as e:
-        print(f"Libas fetch failed: {e}", flush=True)
-        return
-    print(f"Libas sync: fetched {len(raws)} raw products", flush=True)
-    converted = []
-    for raw in raws:
-        if time.time() - start > LIBAS_TIME_LIMIT:
-            print("Libas sync: time limit hit, saving partial", flush=True)
-            break
-        p = convert_libas_product(raw, now, start)
-        if p:
-            converted.append(p)
-    print(f"Libas sync: {len(converted)} products ready", flush=True)
-    PRODS.mkdir(parents=True, exist_ok=True)
-    (PRODS / "libas.json").write_text(json.dumps(converted, ensure_ascii=False), encoding="utf-8")
-    mark_changed()
 
 
 # ============================================================
