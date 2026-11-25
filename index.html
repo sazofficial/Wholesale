@@ -612,7 +612,7 @@ function place(){
   var base="ORD-"+Date.now().toString(36).toUpperCase();
   var info={name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:note};
   var orders=items.map(function(it,i){
-    return{orderId:items.length>1?base+"-"+(i+1):base,productId:it.id,product:it.raw||it.title,price:it.price,qty:it.qty,total:it.price*it.qty,name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:[note,it.note].filter(Boolean).join(" | "),size:(CKCART?"":($("fz")?$("fz").value:SZ)),website:v("fh")};
+    return{orderId:items.length>1?base+"-"+(i+1):base,productId:it.id,product:it.raw||it.title,price:it.price,qty:it.qty,total:it.price*it.qty,name:name,mobile:mob,address:addr,city:city,state:st,pincode:pin,note:[note,it.note].filter(Boolean).join(" | "),size: CKCART ? (it.sz || "") : ($("fz") ? $("fz").value : SZ),website:v("fh")};
   });
   var tq=0,tt=0;items.forEach(function(it){tq+=it.qty;tt+=it.price*it.qty});
   var sum={orderId:base,product:items.map(function(it){return it.title}).join(", "),qty:tq,total:tt,mobile:mob};
