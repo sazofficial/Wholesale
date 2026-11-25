@@ -1,3 +1,5 @@
+import urllib.request
+import html as _html
 import os, re, sys, json, zipfile, hashlib, asyncio, shutil, time, traceback
 import datetime as dt
 from pathlib import Path
@@ -379,6 +381,139 @@ async def download_resume(client, msg, cur, k, st):
     mark_changed()
 
 
+LIBAS_API = "https://thelibas.com/wp-json/wc/store/v1/products"
+LIBAS_PAGES = 5          # max 500 products
+LIBAS_TIME_LIMIT = 300   # 5 min max for sync
+
+
+def _libas_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "SAZ-Sync/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read()
+
+
+def fetch_libas_products():
+    """Fetch all products from Libas public Store API."""
+    out = []
+    for page in range(1, LIBAS_PAGES + 1):
+        try:
+            data = json.loads(_libas_get(f"{LIBAS_API}?per_page=100&page={page}").decode("utf-8"))
+        except Exception as e:
+            print(f"Libas fetch page {page} error: {e}", flush=True)
+            break
+        if not isinstance(data, list) or not data:
+            break
+        out.extend(data)
+        if len(data) < 100:
+            break
+    return out
+
+
+def download_libas_image(url):
+    """Download + compress one image. Return 'images/xxxx.jpg' or None."""
+    h = hashlib.sha1(url.encode()).hexdigest()[:12]
+    out = IMG_DIR / f"lb{h}.jpg"
+    if out.exists():
+        return f"images/{out.name}"
+    try:
+        data = _libas_get(url)
+        tmp = WORK / f"tmp_lb_{h}.jpg"
+        tmp.write_bytes(data)
+        with Image.open(tmp) as im:
+            im = im.convert("RGB")
+            im.thumbnail((800, 800), Image.LANCZOS)
+            im.save(out, "JPEG", quality=72, optimize=True, progressive=True)
+        tmp.unlink(missing_ok=True)
+        return f"images/{out.name}"
+    except Exception as e:
+        print(f"Libas image skip: {e}", flush=True)
+        return None
+
+
+def _libas_price(prices):
+    """WC Store API returns minor units (paise). /100 for rupees."""
+    try:
+        return int(prices.get("price") or 0) // 100
+    except (ValueError, TypeError):
+        return 0
+
+
+def convert_libas_product(raw, now, start_time):
+    """Convert one Libas product to internal shape."""
+    try:
+        name = (raw.get("name") or "").strip()
+        if not name:
+            return None
+        price = _libas_price(raw.get("prices") or {})
+        if price < 10 or price > 500000:
+            return None
+        # Images (max 3)
+        images = []
+        for img in (raw.get("images") or [])[:3]:
+            if time.time() - start_time > LIBAS_TIME_LIMIT:
+                break
+            src = img.get("src")
+            if src:
+                local = download_libas_image(src)
+                if local:
+                    images.append(local)
+        if not images:
+            return None
+        # Sizes from attributes
+        sizes = []
+        for attr in (raw.get("attributes") or []):
+            if (attr.get("name") or "").lower() == "size":
+                sizes = [t.get("name", "").strip() for t in (attr.get("terms") or []) if t.get("name")]
+        # Description (strip HTML)
+        desc_html = raw.get("description") or ""
+        desc = _html.unescape(re.sub(r"<[^>]+>", " ", desc_html))
+        desc = re.sub(r"\s+", " ", desc).strip()[:1000]
+        # Category
+        cats = raw.get("categories") or []
+        category = (cats[0].get("name") or "").strip() if cats else ""
+        # Date
+        date_str = raw.get("date_created") or raw.get("date_modified") or now.isoformat()
+        # ID: same pattern as WhatsApp (p + hex, so bucket works)
+        libas_id = raw.get("id", "")
+        pid = "p" + hashlib.sha1(f"libas-{libas_id}".encode()).hexdigest()[:8]
+        return {
+            "id": pid,
+            "title": name[:140],
+            "raw": name,
+            "text": desc,
+            "price": price,          # <-- as-is, NO margin
+            "date": date_str,
+            "category": category,
+            "crop": "",
+            "images": images,
+            "videos": [],
+            "sizes": sizes,
+        }
+    except Exception as e:
+        print(f"Libas convert error: {e}", flush=True)
+        return None
+
+
+def sync_libas(now):
+    """Fetch Libas, convert, save store/products/libas.json."""
+    start = time.time()
+    print("Libas sync: starting", flush=True)
+    raws = fetch_libas_products()
+    print(f"Libas sync: fetched {len(raws)} raw products", flush=True)
+    converted = []
+    for raw in raws:
+        if time.time() - start > LIBAS_TIME_LIMIT:
+            print("Libas sync: time limit hit, saving partial", flush=True)
+            break
+        p = convert_libas_product(raw, now, start)
+        if p:
+            converted.append(p)
+    print(f"Libas sync: {len(converted)} products ready", flush=True)
+    PRODS.mkdir(parents=True, exist_ok=True)
+    (PRODS / "libas.json").write_text(json.dumps(converted, ensure_ascii=False), encoding="utf-8")
+    mark_changed()
+    
+    
 async def sync_downloads(chat, st):
     async with TelegramClient(StringSession(os.environ["TG_SESSION"]),
                               int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as client:
